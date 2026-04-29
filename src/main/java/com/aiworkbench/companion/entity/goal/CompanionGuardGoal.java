@@ -93,6 +93,14 @@ public class CompanionGuardGoal extends Goal {
             // Move toward target
             companion.getNavigation().moveTo(target.getX(), target.getY(), target.getZ(), speed);
             companion.setSpeed((float) speed);
+
+            // Manual jump when target is slightly above us (navigation can't path to higher ground)
+            double verticalDiff = target.getY() - companion.getY();
+            double horizontalDistSq = companion.distanceToSqr(target.getX(), companion.getY(), target.getZ());
+            if (verticalDiff > 0.5 && verticalDiff <= 2.0 && horizontalDistSq <= 4.0 && companion.onGround()) {
+                // Target is above us and close enough - jump!
+                companion.getJumpControl().jump();
+            }
         } else {
             // In attack range - stop and attack
             companion.getNavigation().stop();

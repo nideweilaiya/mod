@@ -26,8 +26,10 @@ public class CompanionKeyHandler {
     public static final String KEY_OPEN_SETTINGS = "key.aicompanion.open_settings";
     public static final String KEY_OPEN_BACKPACK = "key.aicompanion.open_backpack";
     public static final String KEY_TELEPORT = "key.aicompanion.teleport";
+    public static final String KEY_FOLLOW_TOGGLE = "key.aicompanion.follow_toggle";
+    public static final String KEY_FOLLOW_CANCEL = "key.aicompanion.follow_cancel";
 
-    // Keys: C=list, G=settings, B=backpack, K=teleport
+    // Keys: C=list, G=settings, B=backpack, K=teleport, F=toggle follow, ESC=cancel task
     public static final KeyMapping OPEN_LIST_KEY = new KeyMapping(
         KEY_OPEN_GUI,
         GLFW.GLFW_KEY_C,
@@ -52,6 +54,20 @@ public class CompanionKeyHandler {
         CATEGORY
     );
 
+    // V键 - 切换跟随/任务模式
+    public static final KeyMapping FOLLOW_TOGGLE_KEY = new KeyMapping(
+        KEY_FOLLOW_TOGGLE,
+        GLFW.GLFW_KEY_V,
+        CATEGORY
+    );
+
+    // ESC键 - 取消当前任务，返回跟随模式
+    public static final KeyMapping FOLLOW_CANCEL_KEY = new KeyMapping(
+        KEY_FOLLOW_CANCEL,
+        GLFW.GLFW_KEY_ESCAPE,
+        CATEGORY
+    );
+
     // Cooldown tracking (client-side)
     private static final long TELEPORT_COOLDOWN_MS = 60000; // 1 minute
     private static long lastTeleportTime = 0;
@@ -64,6 +80,8 @@ public class CompanionKeyHandler {
             event.register(OPEN_SETTINGS_KEY);
             event.register(OPEN_BACKPACK_KEY);
             event.register(TELEPORT_KEY);
+            event.register(FOLLOW_TOGGLE_KEY);
+            event.register(FOLLOW_CANCEL_KEY);
         }
     }
 
@@ -111,6 +129,18 @@ public class CompanionKeyHandler {
                     net.minecraft.network.chat.Component.literal("§a[Teleport] Companion teleported to you!"),
                     true
                 );
+            }
+
+            // F 键 - 切换跟随/任务模式
+            if (FOLLOW_TOGGLE_KEY.consumeClick()) {
+                mc.player.connection.sendCommand("companion followtoggle");
+                AICompanionMod.LOGGER.info("[KeyHandler] F key pressed: toggling follow mode");
+            }
+
+            // ESC 键 - 取消当前任务，返回跟随模式
+            if (FOLLOW_CANCEL_KEY.consumeClick()) {
+                mc.player.connection.sendCommand("companion follow");
+                AICompanionMod.LOGGER.info("[KeyHandler] ESC key pressed: returning to follow mode");
             }
         }
     }

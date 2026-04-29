@@ -66,11 +66,21 @@ public class CompanionFollowGoal extends Goal {
         // Get squared distance to owner
         double distSq = companion.distanceToSqr(owner);
 
-        // Determine speed based on distance
-        double navSpeed;
+        // When distance exceeds 10 blocks, use direct movement control for faster response
+        // This is more reliable than pathfinding when owner teleports or moves quickly
         if (distSq > DISTANCE_FAR_SQ) {
-            navSpeed = NAV_SPEED_FAR;
-        } else if (distSq > DISTANCE_CLOSE_SQ) {
+            // Use MoveControl for direct, responsive chase
+            // Speed 2.0 * MOVEMENT_SPEED attribute (~0.3) = ~0.6 blocks/tick = fast chase
+            companion.getMoveControl().setWantedPosition(
+                owner.getX(), owner.getY(), owner.getZ(), 2.0
+            );
+            ticksSinceMove++;
+            return;
+        }
+
+        // Determine speed based on distance for normal follow
+        double navSpeed;
+        if (distSq > DISTANCE_CLOSE_SQ) {
             navSpeed = NAV_SPEED_CLOSE;
         } else {
             // Very close - stop moving but keep looking
@@ -90,6 +100,13 @@ public class CompanionFollowGoal extends Goal {
 
         // Use navigation to move
         companion.getNavigation().moveTo(targetPos.getX(), targetPos.getY(), targetPos.getZ(), navSpeed);
+
+        // Manual jump when owner is slightly above us (navigation can't path to higher ground)
+        double verticalDiff = owner.getY() - companion.getY();
+        if (verticalDiff > 0.5 && verticalDiff <= 2.0 && companion.onGround()) {
+            // Owner is above us and close - jump!
+            companion.getJumpControl().jump();
+        }
 
         ticksSinceMove++;
     }

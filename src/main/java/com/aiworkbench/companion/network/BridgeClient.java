@@ -14,6 +14,7 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import java.util.concurrent.*;
+import java.util.Random;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -28,8 +29,9 @@ import java.util.concurrent.ConcurrentHashMap;
 public class BridgeClient implements AutoCloseable {
     private static final String DEFAULT_HOST = "localhost";
     private static final int DEFAULT_PORT = 8767; // Different from CompanionTCPServer
-    private static final int RECONNECT_DELAY_SECONDS = 5;
-    private static final int MAX_RECONNECT_ATTEMPTS = 5;
+    private static final int INITIAL_RECONNECT_DELAY = 1;  // seconds
+    private static final int MAX_RECONNECT_DELAY = 60;    // seconds
+    private static final int MAX_RECONNECT_ATTEMPTS = 3;  // Reduced: no server = give up quickly
 
     private final String host;
     private final int port;
@@ -44,6 +46,9 @@ public class BridgeClient implements AutoCloseable {
     private int reconnectAttempts = 0;
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
     private final Map<String, ScheduledFuture<?>> pendingDialogueHides = new ConcurrentHashMap<>();
+    private volatile long lastPongTime = 0;
+    private ScheduledFuture<?> heartbeatFuture;
+    private final Random random = new Random();
 
     public BridgeClient() {
         this(DEFAULT_HOST, DEFAULT_PORT);
@@ -91,10 +96,14 @@ public class BridgeClient implements AutoCloseable {
 
             connected = true;
             reconnectAttempts = 0;
+            lastPongTime = System.currentTimeMillis();
             AICompanionMod.LOGGER.info("[Bridge] Connected!");
 
             // Start reading messages in background
             executor.submit(this::readLoop);
+
+            // Start heartbeat scheduler
+            startHeartbeat();
 
         } catch (IOException e) {
             AICompanionMod.LOGGER.warn("[Bridge] Failed to connect: " + e.getMessage());
@@ -111,9 +120,13 @@ public class BridgeClient implements AutoCloseable {
             return;
         }
         reconnectAttempts++;
-        AICompanionMod.LOGGER.info("[Bridge] Scheduling reconnect attempt " + reconnectAttempts + " in " + RECONNECT_DELAY_SECONDS + "s");
+        // Exponential backoff with jitter: min(INITIAL * 2^(attempt-1), MAX) + random jitter
+        int delay = Math.min(INITIAL_RECONNECT_DELAY * (1 << (reconnectAttempts - 1)), MAX_RECONNECT_DELAY);
+        int jitter = random.nextInt(Math.min(delay, 5)); // 0-4s jitter
+        int actualDelay = delay + jitter;
+        AICompanionMod.LOGGER.info("[Bridge] Reconnect attempt " + reconnectAttempts + "/" + MAX_RECONNECT_ATTEMPTS + " in " + actualDelay + "s (base=" + delay + ")");
         try {
-            Thread.sleep(RECONNECT_DELAY_SECONDS * 1000);
+            Thread.sleep(actualDelay * 1000L);
             connect();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -121,12 +134,31 @@ public class BridgeClient implements AutoCloseable {
     }
 
     private void disconnect() {
+        stopHeartbeat();
         try {
             if (writer != null) writer.close();
             if (reader != null) reader.close();
             if (socket != null) socket.close();
         } catch (IOException e) {
             // Ignore
+        }
+    }
+
+    private void startHeartbeat() {
+        stopHeartbeat();
+        // Schedule heartbeat every 10 seconds
+        heartbeatFuture = scheduler.scheduleAtFixedRate(() -> {
+            if (running && connected) {
+                sendHeartbeat();
+            }
+        }, 10, 10, TimeUnit.SECONDS);
+        AICompanionMod.LOGGER.info("[Bridge] Heartbeat scheduled");
+    }
+
+    private void stopHeartbeat() {
+        if (heartbeatFuture != null) {
+            heartbeatFuture.cancel(false);
+            heartbeatFuture = null;
         }
     }
 
@@ -234,7 +266,7 @@ public class BridgeClient implements AutoCloseable {
             case "skin": handleSkin(msg); break;
             case "remove": handleRemove(msg); break;
             case "follow": handleFollow(msg); break;
-            case "pong": /* heartbeat response, ignore */ break;
+            case "pong": lastPongTime = System.currentTimeMillis(); break;
             default: AICompanionMod.LOGGER.warn("[Bridge] Unknown command: " + msg.type);
         }
     }

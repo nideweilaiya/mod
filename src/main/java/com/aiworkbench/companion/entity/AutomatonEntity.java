@@ -63,7 +63,7 @@ public class AutomatonEntity extends Monster {
     // ==================== Guard Mode (LivingEntity Combat) ====================
     private boolean guardModeEnabled = false;
     private net.minecraft.world.entity.LivingEntity guardTarget = null;
-    private static final double ATTACK_REACH = 2.0D;  // Melee attack reach
+    private static final double ATTACK_REACH = 3.0D;  // Melee attack reach (increased for better hitting)
 
     // ==================== Mine Mode (Task System) ====================
     private boolean mineModeEnabled = false;
@@ -77,8 +77,37 @@ public class AutomatonEntity extends Monster {
     private static final int DEFAULT_DIALOGUE_DURATION_TICKS = 100; // ~5 seconds
     private long lastSituationWarningTick = 0;  // Prevent spam: only warn every ~30 seconds
 
+    // ==================== Active Decision State Machine ====================
+    private String currentQuestion = null;      // Current active question (null = no question)
+    private int questionEndTick = 0;            // Tick when question should disappear
+    private int questionCooldown = 0;           // Cooldown ticks before next question (prevents spam)
+    private static final int QUESTION_DURATION_TICKS = 60;    // 3 seconds for questions
+    private static final int QUESTION_COOLDOWN_TICKS = 200;   // 10 seconds cooldown between questions
+    private static final int MIN_TICKS_BETWEEN_QUESTIONS = 600; // 30 seconds global cooldown
+
+    // Last question type shown (to avoid repeating same question)
+    private String lastQuestionType = null;
+    private int ticksSinceLastQuestion = 0;
+
     // ==================== Follow Goal Reference ====================
     private CompanionFollowGoal followGoal;
+
+    // ==================== Follow Mode Toggle (F Key) ====================
+    // true = follow mode (companion follows owner), false = task mode (guard/mine/chop active)
+    private boolean followModeActive = true;
+
+    // ==================== Visibility (Hide Command) ====================
+    private boolean hidden = false;
+
+    // ==================== Stop Command ====================
+    private boolean movementStopped = false;
+    private int stopToggleCooldown = 0;  // Prevents accidental double-toggle
+    private static final int STOP_COOLDOWN_TICKS = 40;  // ~2 seconds
+
+    // ==================== Patrol Mode ====================
+    private boolean patrolModeEnabled = false;
+    private BlockPos patrolCenter = null;
+    private static final float PATROL_RADIUS = 8.0f;
 
     // ==================== Inventory ====================
     private static final int INVENTORY_SIZE = 27;  // 3 rows x 9 columns
@@ -109,13 +138,13 @@ public class AutomatonEntity extends Monster {
 
     public static AttributeSupplier.Builder createAttributes() {
         return Mob.createMobAttributes()
-            .add(Attributes.MAX_HEALTH, 60.0D)      // 30 hearts - much tankier
+            .add(Attributes.MAX_HEALTH, 120.0D)     // 60 hearts - very tanky
             .add(Attributes.MOVEMENT_SPEED, 0.3D)  // Match player sprint speed
-            .add(Attributes.ARMOR_TOUGHNESS, 4.0D) // Some explosion protection
-            .add(Attributes.KNOCKBACK_RESISTANCE, 0.5D) // Partial knockback resistance
+            .add(Attributes.ARMOR_TOUGHNESS, 8.0D) // Higher explosion protection
+            .add(Attributes.KNOCKBACK_RESISTANCE, 0.7D) // Good knockback resistance
             .add(Attributes.FOLLOW_RANGE, 16.0D)
-            .add(Attributes.ATTACK_DAMAGE, 2.0D)
-            .add(Attributes.ARMOR, 4.0D);          // 4 armor points
+            .add(Attributes.ATTACK_DAMAGE, 4.0D)   // Higher damage to fight back
+            .add(Attributes.ARMOR, 8.0D);          // 8 armor points (half of diamond)
     }
 
     // ==================== Goal Selector (Phase 2: Task System) ====================
@@ -175,6 +204,37 @@ public class AutomatonEntity extends Monster {
     public void tick() {
         super.tick();
         tickCount++;
+
+        // If hidden, only tick essential systems (no movement, no perception push)
+        if (hidden) {
+            // Dialogue auto-hide still works when hidden
+            if (!dialogueText.isEmpty() && tickCount > dialogueEndTick) {
+                this.setCustomNameVisible(false);
+                this.setCustomName(net.minecraft.network.chat.Component.literal(" "));
+                dialogueText = "";
+            }
+            return;
+        }
+
+        // If movement stopped, skip movement-related ticks but keep essential systems
+        if (movementStopped) {
+            // Decrement cooldown
+            if (stopToggleCooldown > 0) stopToggleCooldown--;
+            // Dialogue auto-hide still works
+            if (!dialogueText.isEmpty() && tickCount > dialogueEndTick) {
+                this.setCustomNameVisible(false);
+                this.setCustomName(net.minecraft.network.chat.Component.literal(" "));
+                dialogueText = "";
+            }
+            return;
+        }
+
+        // Decrement toggle cooldown
+        if (stopToggleCooldown > 0) stopToggleCooldown--;
+
+        // Patrol behavior - wander around patrol center
+        tickPatrol();
+
         if (tickCount % 100 == 0) {
             Vec3 pos = this.position();
             AICompanionMod.LOGGER.debug("[AutomatonEntity] Tick {} - Position: ({}, {}, {})",
@@ -239,6 +299,28 @@ public class AutomatonEntity extends Monster {
     }
 
     /**
+     * Patrol behavior - wander around patrol center when patrol mode is enabled
+     */
+    private void tickPatrol() {
+        if (!patrolModeEnabled || patrolCenter == null) return;
+        if (followModeActive || guardModeEnabled || mineModeEnabled || chopModeEnabled) return;
+        if (movementStopped || hidden) return;
+
+        // Check if we've reached our current patrol target
+        if (this.navigation.isDone()) {
+            // Pick a new random position within patrol radius
+            float randX = (this.random.nextFloat() - 0.5f) * PATROL_RADIUS * 2;
+            float randZ = (this.random.nextFloat() - 0.5f) * PATROL_RADIUS * 2;
+            int targetX = (int)(patrolCenter.getX() + randX);
+            int targetY = patrolCenter.getY();
+            int targetZ = (int)(patrolCenter.getZ() + randZ);
+
+            // Move to new patrol point
+            this.navigation.moveTo(targetX, targetY, targetZ, 0.8);
+        }
+    }
+
+    /**
      * Check if inventory has at least one empty slot
      */
     private boolean hasInventorySpace() {
@@ -251,53 +333,130 @@ public class AutomatonEntity extends Monster {
     /**
      * Autonomous situation evaluation - reacts to environment without LLM
      * Runs every 60 ticks (~3 seconds) with cooldown to avoid spam
+     *
+     * State machine behavior:
+     * - Dangers: immediate warning (bypass question system)
+     * - Resources: ask owner questions ("要采矿吗？") with 3s display, 10s cooldown
+     * - Owner health: check owner's health, warn if low
      */
     private void evaluateSituation() {
         if (this.level().isClientSide) return;
 
-        // Cooldown: don't react more than once every 30 seconds (600 ticks)
+        // Tick the question cooldown
+        if (questionCooldown > 0) {
+            questionCooldown--;
+        }
+        if (ticksSinceLastQuestion < Integer.MAX_VALUE) {
+            ticksSinceLastQuestion++;
+        }
+
+        // Auto-clear expired question (3 second display time)
+        if (currentQuestion != null && tickCount > questionEndTick) {
+            clearActiveQuestion();
+        }
+
+        // Cooldown: don't react more than once every 30 seconds (600 ticks) for warnings
         if (tickCount - lastSituationWarningTick < 600) return;
 
         PerceptionEngine.PerceptionData perception = PerceptionEngine.gatherPerception(this);
         if (perception == null) return;
 
-        String warning = null;
-
-        // Critical dangers - immediate warning
+        // ==================== CRITICAL DANGERS (Immediate Warning, No Question) ====================
         if (perception.dangerLava) {
-            warning = "主人，小心岩浆！";
+            showWarning("主人，小心岩浆！");
+            return;
         } else if (perception.dangerFall) {
-            warning = "注意脚下，别摔下去了！";
+            showWarning("注意脚下，别摔下去了！");
+            return;
         } else if (perception.dangerHostile) {
-            warning = "有敌对生物在旁边！";
+            showWarning("有敌对生物在旁边！");
+            return;
         } else if (perception.dangerSuffocation) {
-            warning = "主人，这里会窒息！";
-        } else if (perception.dangerLowHealth && perception.health > 0) {
-            warning = "主人血量低了，注意安全！";
+            showWarning("主人，这里会窒息！");
+            return;
         }
 
-        // Resource discovery - comment on nearby ores
-        if (warning == null && !perception.resources.isEmpty()) {
-            String topResource = perception.resources.get(0);
-            if (topResource.contains("diamond") || topResource.contains("emerald")) {
-                warning = "主人，发现钻石了！";
-            } else if (topResource.contains("gold")) {
-                warning = "这里有金矿！";
-            } else if (topResource.contains("iron")) {
-                warning = "主人，前面有铁矿！";
-            } else if (topResource.contains("coal")) {
-                warning = "发现煤矿了！";
-            } else if (topResource.contains("oak_log") || topResource.contains("spruce_log")) {
-                warning = "前面有树！";
+        // ==================== OWNER HEALTH CHECK ====================
+        ServerPlayer owner = getOwner();
+        if (owner != null && owner.getHealth() <= 10.0f && !perception.dangerLowHealth) {
+            // Only remind if owner health is low (5 hearts) and we haven't already warned recently
+            if (ticksSinceLastQuestion >= MIN_TICKS_BETWEEN_QUESTIONS) {
+                askQuestion("owner_health_low", "主人血低了！");
+                return;
             }
         }
 
-        // Log the evaluation
-        if (warning != null) {
-            AICompanionMod.LOGGER.info("[AutomatonEntity] Situation reaction: " + warning);
-            showDialogue(warning, 80);  // Show for 4 seconds
-            lastSituationWarningTick = tickCount;
+        // ==================== RESOURCE QUESTIONS (Active Decision) ====================
+        // Skip if we already have an active question or on cooldown
+        if (currentQuestion != null || questionCooldown > 0) return;
+
+        if (!perception.resources.isEmpty()) {
+            String topResource = perception.resources.get(0);
+
+            // Determine question type based on resource
+            String questionType = null;
+            String questionText = null;
+
+            if (topResource.contains("diamond") || topResource.contains("emerald") ||
+                topResource.contains("gold") || topResource.contains("iron") ||
+                topResource.contains("coal") || topResource.contains("lapis") ||
+                topResource.contains("redstone") || topResource.contains("copper")) {
+                // Ore detected - ask about mining
+                questionType = "ore";
+                questionText = "要采矿吗？";
+            } else if (topResource.contains("log") || topResource.contains("oak_log") ||
+                       topResource.contains("spruce_log") || topResource.contains("birch_log") ||
+                       topResource.contains("jungle_log") || topResource.contains("dark_oak_log") ||
+                       topResource.contains("acacia_log")) {
+                // Tree/log detected - ask about chopping
+                questionType = "tree";
+                questionText = "要砍树吗？";
+            }
+
+            // Ask question if we found a valid type and it's different from last question
+            if (questionType != null && questionText != null) {
+                if (!questionType.equals(lastQuestionType)) {
+                    askQuestion(questionType, questionText);
+                    return;
+                }
+            }
         }
+    }
+
+    /**
+     * Show a warning message (bypasses question system, immediate display)
+     */
+    private void showWarning(String message) {
+        AICompanionMod.LOGGER.info("[AutomatonEntity] Warning: " + message);
+        showDialogue(message, 80);  // Show for 4 seconds
+        lastSituationWarningTick = tickCount;
+    }
+
+    /**
+     * Ask an active decision question (state machine)
+     * @param questionType unique identifier for this question type
+     * @param questionText the question text to display
+     */
+    private void askQuestion(String questionType, String questionText) {
+        if (questionCooldown > 0) return;
+
+        this.currentQuestion = questionType;
+        this.questionEndTick = this.tickCount + QUESTION_DURATION_TICKS;
+        this.questionCooldown = QUESTION_COOLDOWN_TICKS;
+        this.lastQuestionType = questionType;
+        this.ticksSinceLastQuestion = 0;
+
+        AICompanionMod.LOGGER.info("[AutomatonEntity] Question: " + questionText + " (type: " + questionType + ")");
+        showDialogue(questionText, QUESTION_DURATION_TICKS);
+        lastSituationWarningTick = tickCount;
+    }
+
+    /**
+     * Clear the active question state
+     */
+    private void clearActiveQuestion() {
+        this.currentQuestion = null;
+        // Don't reset questionCooldown - let it run its course
     }
 
     /**
@@ -348,8 +507,6 @@ public class AutomatonEntity extends Monster {
             // Set display name based on owner
             entity.setCustomName(net.minecraft.network.chat.Component.literal(owner.getName().getString() + "'s Companion"));
         }
-        // Set to max health on spawn
-        entity.setHealth(entity.getMaxHealth());
         return entity;
     }
 
@@ -472,6 +629,173 @@ public class AutomatonEntity extends Monster {
             if (!enabled) {
                 this.getNavigation().stop();
             }
+        }
+    }
+
+    // ==================== Follow Mode Toggle (F Key) ====================
+
+    /**
+     * Check if follow mode is active (true) or task mode (false)
+     */
+    public boolean isFollowModeActive() {
+        return followModeActive;
+    }
+
+    /**
+     * Toggle between follow mode and task mode (F key)
+     * - If in follow mode: enable the first available task (guard -> mine -> chop)
+     * - If in task mode: disable all tasks and return to follow mode
+     */
+    public boolean toggleFollowMode() {
+        // Mode cycle: 0=follow, 1=guard, 2=mine, 3=chop
+        if (followModeActive) {
+            // Currently following - switch to guard
+            setGuardModeEnabled(true);
+            setMineModeEnabled(false);
+            setChopModeEnabled(false);
+            followModeActive = false;
+            showDialogue("切换到守护模式", 60);
+            AICompanionMod.LOGGER.info("[AutomatonEntity] F key: Switched to guard mode");
+        } else if (guardModeEnabled) {
+            // Guard -> Mine
+            setGuardModeEnabled(false);
+            setMineModeEnabled(true);
+            setChopModeEnabled(false);
+            showDialogue("切换到挖掘模式", 60);
+            AICompanionMod.LOGGER.info("[AutomatonEntity] F key: Switched to mine mode");
+        } else if (mineModeEnabled) {
+            // Mine -> Chop
+            setGuardModeEnabled(false);
+            setMineModeEnabled(false);
+            setChopModeEnabled(true);
+            showDialogue("切换到砍伐模式", 60);
+            AICompanionMod.LOGGER.info("[AutomatonEntity] F key: Switched to chop mode");
+        } else if (chopModeEnabled) {
+            // Chop -> Follow
+            setGuardModeEnabled(false);
+            setMineModeEnabled(false);
+            setChopModeEnabled(false);
+            followModeActive = true;
+            showDialogue("切换到跟随模式", 60);
+            AICompanionMod.LOGGER.info("[AutomatonEntity] F key: Switched to follow mode");
+        } else {
+            // Fallback -> Follow
+            followModeActive = true;
+            showDialogue("切换到跟随模式", 60);
+        }
+        return followModeActive;
+    }
+
+    /**
+     * Cancel current task and return to follow mode (ESC key)
+     * Disables all task modes and sets followModeActive to true
+     */
+    public void returnToFollow() {
+        setGuardModeEnabled(false);
+        setMineModeEnabled(false);
+        setChopModeEnabled(false);
+        followModeActive = true;
+        showDialogue("返回跟随模式", 60);
+        AICompanionMod.LOGGER.info("[AutomatonEntity] ESC: Returned to follow mode");
+    }
+
+    // ==================== Hide/Show (Companion Visibility) ====================
+
+    public boolean isHidden() {
+        return this.hidden;
+    }
+
+    public void setHidden(boolean hidden) {
+        this.hidden = hidden;
+        this.setInvisible(hidden);
+        showDialogue(hidden ? "已隐藏" : "已显示", 40);
+        AICompanionMod.LOGGER.info("[AutomatonEntity] Hidden: {}", hidden);
+    }
+
+    public void toggleHidden() {
+        setHidden(!this.hidden);
+    }
+
+    // ==================== Stop Movement ====================
+
+    public boolean isMovementStopped() {
+        return this.movementStopped;
+    }
+
+    public void stopAllMovement() {
+        this.movementStopped = true;
+        this.setDeltaMovement(0, 0, 0);
+        this.navigation.stop();
+        this.getMoveControl().setWantedPosition(this.getX(), this.getY(), this.getZ(), 0);
+        showDialogue("已停止移动", 40);
+        AICompanionMod.LOGGER.info("[AutomatonEntity] Movement stopped");
+    }
+
+    public void resumeMovement() {
+        this.movementStopped = false;
+        showDialogue("恢复移动", 40);
+        AICompanionMod.LOGGER.info("[AutomatonEntity] Movement resumed");
+    }
+
+    public void toggleMovementStopped() {
+        if (stopToggleCooldown > 0) {
+            return;  // Ignore toggle during cooldown
+        }
+        stopToggleCooldown = STOP_COOLDOWN_TICKS;
+        if (this.movementStopped) {
+            resumeMovement();
+        } else {
+            stopAllMovement();
+        }
+    }
+
+    // ==================== Patrol Mode ====================
+
+    public boolean isPatrolModeEnabled() {
+        return this.patrolModeEnabled;
+    }
+
+    public void setPatrolModeEnabled(boolean enabled) {
+        this.patrolModeEnabled = enabled;
+        if (enabled) {
+            this.patrolCenter = this.getOnPos();
+            setGuardModeEnabled(false);
+            setMineModeEnabled(false);
+            setChopModeEnabled(false);
+            followModeActive = false;
+            showDialogue("巡逻模式", 60);
+            AICompanionMod.LOGGER.info("[AutomatonEntity] Patrol mode enabled at {}", patrolCenter);
+        } else {
+            showDialogue("退出巡逻", 40);
+            AICompanionMod.LOGGER.info("[AutomatonEntity] Patrol mode disabled");
+        }
+    }
+
+    public BlockPos getPatrolCenter() {
+        return this.patrolCenter;
+    }
+
+    public void teleportToOwner() {
+        ServerPlayer owner = getOwner();
+        if (owner != null) {
+            teleportTo(owner.getX(), owner.getY(), owner.getZ());
+            setDeltaMovement(0, 0, 0);
+            fallDistance = 0;
+            AICompanionMod.LOGGER.info("[AutomatonEntity] Teleported to owner at {}, {}, {}",
+                owner.getX(), owner.getY(), owner.getZ());
+        }
+    }
+
+    public void teleportDown() {
+        ServerPlayer owner = getOwner();
+        if (owner != null) {
+            // Teleport to owner's position but one block lower (on ground)
+            double targetY = owner.getY() - 1;
+            teleportTo(owner.getX(), targetY, owner.getZ());
+            setDeltaMovement(0, 0, 0);
+            fallDistance = 0;
+            showDialogue("下来了！", 40);
+            AICompanionMod.LOGGER.info("[AutomatonEntity] Teleported down to {}", targetY);
         }
     }
 
@@ -618,8 +942,11 @@ public class AutomatonEntity extends Monster {
      * Uses default ATTACK_REACH constant since ATTACK_RANGE attribute may not exist
      */
     public boolean isWithinAttackRange(net.minecraft.world.entity.LivingEntity target) {
-        double distSq = this.distanceToSqr(target.getX(), target.getY(), target.getZ());
-        return distSq <= ATTACK_REACH * ATTACK_REACH;
+        // Use horizontal distance + vertical tolerance for melee
+        double horizontalDistSq = this.distanceToSqr(target.getX(), this.getY(), target.getZ());
+        double verticalDist = Math.abs(this.getY() - target.getY());
+        // Can attack if horizontally close enough and vertically within 2 blocks
+        return horizontalDistSq <= ATTACK_REACH * ATTACK_REACH && verticalDist <= 2.0;
     }
 
     /**

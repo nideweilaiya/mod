@@ -38,13 +38,18 @@ public class PlayerEventHandler {
 
     /**
      * 玩家登录时触发（单人游戏和服务器都适用）
-     * EntityJoinLevelEvent 在单人游戏玩家加入时不触发，改用 PlayerLoggedInEvent
+     * 使用标志防止重复生成
      */
     @SubscribeEvent
     public void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
 
         UUID playerId = player.getUUID();
+
+        // 防止重复生成
+        if (spawnedPlayers.contains(playerId)) {
+            return;
+        }
 
         AICompanionMod.LOGGER.info("Player {} logged in, spawning companion NPC", player.getName().getString());
 
@@ -58,11 +63,6 @@ public class PlayerEventHandler {
                 spawnedPlayers.add(playerId);
                 return;
             }
-        }
-
-        // 同伴已死亡或不存在，需要重新生成
-        if (spawnedPlayers.contains(playerId)) {
-            AICompanionMod.LOGGER.info("Player {} had a companion but it died, respawning", player.getName().getString());
         }
 
         // 为玩家生成同伴NPC
@@ -83,14 +83,19 @@ public class PlayerEventHandler {
 
         AICompanionMod.LOGGER.info("Player {} respawned, handling companion", player.getName().getString());
 
-        // 先移除旧的同伴实体
+        // 死亡重生时移除旧实体（切维度时不移除）
+        // 通过检查实体位置是否在主世界来判断（简化的方式）
         CompanionManager manager = AICompanionMod.companionManager;
         if (manager != null) {
-            manager.removeCompanion(playerId);
+            AutomatonEntity existing = manager.getCompanion(playerId);
+            if (existing != null && !existing.isAlive()) {
+                manager.removeCompanion(playerId);
+                AICompanionMod.LOGGER.info("Player {} died, removing dead companion", player.getName().getString());
+            }
         }
         spawnedPlayers.remove(playerId);
 
-        // 重新生成同伴
+        // 重新生成同伴（如果需要）
         spawnCompanionForPlayer(player);
         spawnedPlayers.add(playerId);
     }
@@ -159,6 +164,8 @@ public class PlayerEventHandler {
                     player.getName().getString(), existingInWorld.getUUID());
                 if (manager != null) {
                     manager.addCompanion(playerId, existingInWorld);
+                    AICompanionMod.LOGGER.info("Re-registered existing companion. Manager now has: {}",
+                        manager.getCompanion(playerId) != null ? "VALID" : "NULL");
                 }
                 return;
             }
@@ -180,11 +187,26 @@ public class PlayerEventHandler {
                 player
             );
 
+            AICompanionMod.LOGGER.info("Created companion entity with UUID: {}, position: {}",
+                companion.getUUID(), companion.position());
+
             boolean success = level.addFreshEntity(companion);
-            AICompanionMod.LOGGER.info("addFreshEntity result: {}, companion spawned", success);
+            AICompanionMod.LOGGER.info("addFreshEntity result: {}, companion spawned at {}",
+                success, companion.position());
+
+            // Ensure health is set after entity is in world
+            companion.setHealth(companion.getMaxHealth());
+            AICompanionMod.LOGGER.info("Companion health set to {} (max: {})",
+                companion.getHealth(), companion.getMaxHealth());
 
             if (manager != null) {
                 manager.addCompanion(playerId, companion);
+                // Verify registration
+                AutomatonEntity verify = manager.getCompanion(playerId);
+                AICompanionMod.LOGGER.info("After addCompanion, getCompanion returns: {}",
+                    verify != null ? verify.getUUID().toString() : "NULL");
+            } else {
+                AICompanionMod.LOGGER.error("companionManager is NULL during spawn!");
             }
 
             // Notify Python client via TCP
@@ -213,9 +235,14 @@ public class PlayerEventHandler {
      * 在世界查找属于指定玩家的伴侣实体
      */
     private AutomatonEntity findCompanionByOwner(ServerLevel level, UUID ownerUUID) {
+        // Search the entire world for the owner's companion
         for (AutomatonEntity entity : level.getEntitiesOfClass(AutomatonEntity.class,
-                net.minecraft.world.phys.AABB.ofSize(net.minecraft.core.BlockPos.containing(0, 64, 0).getCenter(), 200, 384, 200))) {
+                new net.minecraft.world.phys.AABB(
+                    Double.NEGATIVE_INFINITY, -64, Double.NEGATIVE_INFINITY,
+                    Double.POSITIVE_INFINITY, 320, Double.POSITIVE_INFINITY))) {
             if (entity.getOwnerUUID() != null && entity.getOwnerUUID().equals(ownerUUID)) {
+                AICompanionMod.LOGGER.info("findCompanionByOwner found companion {} at {} for owner {}",
+                    entity.getUUID(), entity.position(), ownerUUID);
                 return entity;
             }
         }

@@ -145,6 +145,10 @@ public class CompanionCommands {
                         .executes(ctx -> setFollowMode(ctx.getSource()))
                 )
                 .then(
+                    Commands.literal("followtoggle")
+                        .executes(ctx -> toggleFollowMode(ctx.getSource()))
+                )
+                .then(
                     Commands.literal("status")
                         .executes(ctx -> showStatus(ctx.getSource()))
                 )
@@ -155,6 +159,26 @@ public class CompanionCommands {
                 .then(
                     Commands.literal("teleport")
                         .executes(ctx -> teleportToPlayer(ctx.getSource()))
+                )
+                .then(
+                    Commands.literal("hide")
+                        .executes(ctx -> toggleHide(ctx.getSource()))
+                )
+                .then(
+                    Commands.literal("stop")
+                        .executes(ctx -> stopMovement(ctx.getSource()))
+                )
+                .then(
+                    Commands.literal("patrol")
+                        .executes(ctx -> togglePatrol(ctx.getSource()))
+                )
+                .then(
+                    Commands.literal("come")
+                        .executes(ctx -> comeToPlayer(ctx.getSource()))
+                )
+                .then(
+                    Commands.literal("down")
+                        .executes(ctx -> goDown(ctx.getSource()))
                 )
         );
     }
@@ -778,17 +802,39 @@ public class CompanionCommands {
             return 0;
         }
 
-        // Disable all task modes to return to following
+        // Use returnToFollow to disable all task modes and return to follow mode
         boolean wasInTaskMode = companion.isGuardModeEnabled() || companion.isMineModeEnabled() || companion.isChopModeEnabled();
-        companion.setGuardModeEnabled(false);
-        companion.setMineModeEnabled(false);
-        companion.setChopModeEnabled(false);
+        companion.returnToFollow();
 
         if (wasInTaskMode) {
             source.sendSuccess(() -> Component.literal("§a[Follow] Companion is now following you!"), true);
         } else {
             source.sendSuccess(() -> Component.literal("§a[Follow] Companion is already following you."), true);
         }
+
+        return 1;
+    }
+
+    /**
+     * Toggle between follow mode and task mode (F key)
+     * Cycles: follow -> guard -> mine -> chop -> follow
+     */
+    private static int toggleFollowMode(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) {
+            source.sendFailure(Component.literal("Must be used by a player"));
+            return 0;
+        }
+
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            return 0;
+        }
+
+        boolean nowFollowing = companion.toggleFollowMode();
+        String modeStr = companion.getCurrentModeString();
+        source.sendSuccess(() -> Component.literal("§e[Mode] " + modeStr), true);
 
         return 1;
     }
@@ -821,7 +867,7 @@ public class CompanionCommands {
     }
 
     /**
-     * 复活同伴 - 如果同伴已死亡，重新生成
+     * 复活同伴 - 保持原有的characterId和皮肤设置
      */
     private static int reviveCompanion(CommandSourceStack source) {
         ServerPlayer player = source.getPlayer();
@@ -838,43 +884,39 @@ public class CompanionCommands {
             return 0;
         }
 
-        // 检查现有同伴状态
-        AutomatonEntity existing = manager.getCompanion(playerId);
-        if (existing != null && existing.isAlive()) {
-            source.sendFailure(Component.literal("Your companion is already alive!"));
-            return 0;
+        AutomatonEntity oldCompanion = manager.getCompanion(playerId);
+
+        // 获取原有设置
+        String characterId = "default_companion";
+        int skinType = 0;
+        String skinValue = "";
+        if (oldCompanion != null) {
+            characterId = oldCompanion.getCharacterId();
+            skinType = oldCompanion.getSkinType();
+            skinValue = oldCompanion.getSkinValue();
         }
 
-        // 移除旧的死亡实体引用（如果存在）
+        // 移除旧的死亡实体
         manager.removeCompanion(playerId);
 
-        // 生成新同伴
+        // 生成新同伴，保留原有设置
         ServerLevel level = player.serverLevel();
-        AutomatonEntity companion = AutomatonEntity.create(level, "default_companion", player);
+        AutomatonEntity companion = AutomatonEntity.create(level, characterId, player);
         boolean success = level.addFreshEntity(companion);
 
         if (success) {
+            // 恢复皮肤设置
+            if (skinType == 1) {  // URL skin
+                companion.setSkinFromUrl(skinValue);
+            } else if (skinType == 2) {  // Player name skin
+                companion.setSkinFromPlayer(skinValue);
+            }
+            // 否则使用默认皮肤
+
             manager.addCompanion(playerId, companion);
             source.sendSuccess(() -> Component.literal("§a[Revive] Your companion has been revived!"), true);
-
-            // Notify Python client
-            if (AICompanionMod.tcpServer != null) {
-                AICompanionMod.tcpServer.onCompanionSpawned(
-                    companion.getUUID().toString(),
-                    player.getName().getString(),
-                    companion.blockPosition(),
-                    level
-                );
-            }
-            if (AICompanionMod.bridgeClient != null && AICompanionMod.bridgeClient.isConnected()) {
-                AICompanionMod.bridgeClient.sendCompanionSpawned(
-                    companion.getUUID().toString(),
-                    player.getName().getString(),
-                    companion.blockPosition()
-                );
-            }
-
-            AICompanionMod.LOGGER.info("Companion revived for player {}", player.getName().getString());
+            AICompanionMod.LOGGER.info("Companion revived for player {} (characterId={}, skinType={})",
+                player.getName().getString(), characterId, skinType);
             return 1;
         } else {
             source.sendFailure(Component.literal("Failed to revive companion"));
@@ -913,6 +955,99 @@ public class CompanionCommands {
 
         source.sendSuccess(() -> Component.literal("§a[TP] Companion teleported to you!"), true);
         AICompanionMod.LOGGER.info("Companion teleported to player {}", player.getName().getString());
+        return 1;
+    }
+
+    private static int toggleHide(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) {
+            source.sendFailure(Component.literal("Must be used by a player"));
+            return 0;
+        }
+
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            return 0;
+        }
+
+        companion.toggleHidden();
+        boolean hidden = companion.isHidden();
+        source.sendSuccess(() -> Component.literal(hidden ? "§7[隐藏] Companion hidden" : "§a[显示] Companion visible"), true);
+        return 1;
+    }
+
+    private static int stopMovement(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) {
+            source.sendFailure(Component.literal("Must be used by a player"));
+            return 0;
+        }
+
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            return 0;
+        }
+
+        companion.toggleMovementStopped();
+        boolean stopped = companion.isMovementStopped();
+        source.sendSuccess(() -> Component.literal(stopped ? "§c[停止] Companion stopped" : "§a[移动] Companion moving"), true);
+        return 1;
+    }
+
+    private static int togglePatrol(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) {
+            source.sendFailure(Component.literal("Must be used by a player"));
+            return 0;
+        }
+
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            return 0;
+        }
+
+        boolean enabled = !companion.isPatrolModeEnabled();
+        companion.setPatrolModeEnabled(enabled);
+        source.sendSuccess(() -> Component.literal(enabled ? "§a[巡逻] Patrol mode enabled" : "§7[巡逻] Patrol mode disabled"), true);
+        return 1;
+    }
+
+    private static int comeToPlayer(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) {
+            source.sendFailure(Component.literal("Must be used by a player"));
+            return 0;
+        }
+
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            return 0;
+        }
+
+        companion.teleportToOwner();
+        source.sendSuccess(() -> Component.literal("§a[来了] Companion coming!"), true);
+        return 1;
+    }
+
+    private static int goDown(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) {
+            source.sendFailure(Component.literal("Must be used by a player"));
+            return 0;
+        }
+
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            return 0;
+        }
+
+        companion.teleportDown();
+        source.sendSuccess(() -> Component.literal("§b[下方] Companion going down!"), true);
         return 1;
     }
 }

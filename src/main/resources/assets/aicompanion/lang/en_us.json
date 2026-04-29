@@ -1,0 +1,18 @@
+{
+  "key.categories.aicompanion": "AI Companion",
+  "key.aicompanion.open_gui": "Open Companion List",
+  "key.aicompanion.open_settings": "Open Settings",
+  "key.aicompanion.open_backpack": "Open Backpack",
+  "key.aicompanion.teleport": "Teleport Companion",
+  "gui.aicompanion.title": "AI Companion",
+  "gui.aicompanion.loading": "Loading...",
+  "gui.aicompanion.no_companions": "No companions available",
+  "gui.aicompanion.online": "Online",
+  "gui.aicompanion.offline": "Offline",
+  "gui.aicompanion.summon": "Summon",
+  "gui.aicompanion.follow": "Follow",
+  "gui.aicompanion.skin": "Skin",
+  "gui.aicompanion.chat": "Chat",
+  "gui.aicompanion.back": "Back",
+  "gui.aicompanion.refresh": "Refresh"
+}

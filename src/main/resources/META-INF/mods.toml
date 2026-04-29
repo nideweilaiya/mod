@@ -1,0 +1,31 @@
+modLoader="javafml"
+loaderVersion="[49,)"
+license="MIT"
+issueTrackerURL=""
+
+[[mods]]
+modId="aicompanion"
+version="1.0.0"
+displayName="AI Companion"
+authors="AIWorkbench"
+description='''
+AI Companion Mod - 将玩家转换为NPC伴侣
+- 自定义LivingEntity NPC (AutomatonEntity)
+- 自动为每个玩家生成同伴NPC
+- K键打开GUI控制面板
+- 与Python AI引擎通信
+'''
+
+[[dependencies.aicompanion]]
+modId="forge"
+mandatory=true
+versionRange="[49,)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.aicompanion]]
+modId="minecraft"
+mandatory=true
+versionRange="[1.20.4,1.21)"
+ordering="NONE"
+side="BOTH"

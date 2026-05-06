@@ -26,17 +26,28 @@ import net.minecraft.core.NonNullList;
 public class CompanionNetworkHandler {
 
     private static boolean receivingInventory = false;
-    private static NonNullList<ItemStack> pendingInventory = NonNullList.withSize(27, ItemStack.EMPTY);
+    private static NonNullList<ItemStack> pendingInventory = NonNullList.withSize(33, ItemStack.EMPTY);
 
     @SubscribeEvent
     public static void onClientChatReceived(ClientChatReceivedEvent event) {
         Component message = event.getMessage();
         String text = message.getString();
 
+        if (text.startsWith("[OPEN_INVENTORY]")) {
+            // Right-clicked companion — open backpack GUI
+            event.setMessage(net.minecraft.network.chat.Component.literal(""));
+            Minecraft.getInstance().tell(() -> {
+                CompanionInventoryScreen screen = new CompanionInventoryScreen();
+                Minecraft.getInstance().setScreen(screen);
+                // Screen will request inventory sync on first render
+            });
+            return;
+        }
+
         if (text.startsWith("[INV_START]")) {
             // Start receiving inventory
             receivingInventory = true;
-            pendingInventory = NonNullList.withSize(27, ItemStack.EMPTY);
+            pendingInventory = NonNullList.withSize(33, ItemStack.EMPTY);
             event.setMessage(net.minecraft.network.chat.Component.literal("")); // Hide the message
             return;
         }
@@ -82,7 +93,7 @@ public class CompanionNetworkHandler {
                                 // Ignore tag parse errors
                             }
                         }
-                        if (slot >= 0 && slot < 27) {
+                        if (slot >= 0 && slot < 33) {
                             pendingInventory.set(slot, stack);
                         }
                     }

@@ -2,11 +2,10 @@ package com.aiworkbench.companion.entity.goal;
 
 import com.aiworkbench.companion.entity.AutomatonEntity;
 import net.minecraft.core.BlockPos;
-import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.entity.ai.navigation.PathNavigation;
-import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.EnumSet;
@@ -112,15 +111,11 @@ public class CompanionFollowGoal extends Goal {
     }
 
     private LivingEntity getOwner() {
-        if (companion.getOwnerUUID() == null) return null;
-        if (companion.getServer() == null) return null;
-        // For single-player, getLevel(OVERWORLD) works
-        // Use level() from the companion to get the correct dimension
-        Level companionLevel = companion.level();
-        if (companionLevel instanceof ServerLevel sl) {
-            return sl.getPlayerByUUID(companion.getOwnerUUID());
-        }
-        return null;
+        ServerPlayer owner = companion.getOwner(); // Uses cross-dimension search
+        if (owner == null) return null;
+        // Only follow in same dimension (cross-dimension handled by auto-recall system)
+        if (!owner.level().dimension().equals(companion.level().dimension())) return null;
+        return owner;
     }
 
     /**

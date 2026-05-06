@@ -178,11 +178,11 @@ public class BridgeClient implements AutoCloseable {
     }
 
     /**
-     * Send a JSON message to Python
+     * Send a JSON message to Python via Gson serialization.
      */
-    public void send(String json) {
+    public void send(Map<String, Object> data) {
         if (connected && writer != null && running) {
-            writer.println(json);
+            writer.println(gson.toJson(data));
         }
     }
 
@@ -190,55 +190,60 @@ public class BridgeClient implements AutoCloseable {
      * Send companion spawned event
      */
     public void sendCompanionSpawned(String companionId, String ownerName, BlockPos pos) {
-        String json = String.format(
-            "{\"type\":\"companion_spawned\",\"companion_id\":\"%s\",\"owner_name\":\"%s\",\"x\":%d,\"y\":%d,\"z\":%d}",
-            companionId, ownerName, pos.getX(), pos.getY(), pos.getZ()
-        );
-        send(json);
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("type", "companion_spawned");
+        data.put("companion_id", companionId);
+        data.put("owner_name", ownerName);
+        data.put("x", pos.getX());
+        data.put("y", pos.getY());
+        data.put("z", pos.getZ());
+        send(data);
     }
 
     /**
      * Send companion removed event
      */
     public void sendCompanionRemoved(String companionId) {
-        String json = String.format(
-            "{\"type\":\"companion_removed\",\"companion_id\":\"%s\"}",
-            companionId
-        );
-        send(json);
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("type", "companion_removed");
+        data.put("companion_id", companionId);
+        send(data);
     }
 
     /**
      * Send player interaction event
      */
     public void sendPlayerInteract(String companionId, String playerName, String action) {
-        String json = String.format(
-            "{\"type\":\"player_interact\",\"companion_id\":\"%s\",\"player_name\":\"%s\",\"action\":\"%s\",\"timestamp\":%d}",
-            companionId, playerName, action, System.currentTimeMillis()
-        );
-        send(json);
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("type", "player_interact");
+        data.put("companion_id", companionId);
+        data.put("player_name", playerName);
+        data.put("action", action);
+        data.put("timestamp", System.currentTimeMillis());
+        send(data);
     }
 
     /**
      * Send position update
      */
     public void sendPositionUpdate(String companionId, BlockPos pos) {
-        String json = String.format(
-            "{\"type\":\"position_update\",\"companion_id\":\"%s\",\"x\":%d,\"y\":%d,\"z\":%d}",
-            companionId, pos.getX(), pos.getY(), pos.getZ()
-        );
-        send(json);
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("type", "position_update");
+        data.put("companion_id", companionId);
+        data.put("x", pos.getX());
+        data.put("y", pos.getY());
+        data.put("z", pos.getZ());
+        send(data);
     }
 
     /**
      * Send heartbeat
      */
     public void sendHeartbeat() {
-        String json = String.format(
-            "{\"type\":\"heartbeat\",\"timestamp\":%d}",
-            System.currentTimeMillis()
-        );
-        send(json);
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("type", "heartbeat");
+        data.put("timestamp", System.currentTimeMillis());
+        send(data);
     }
 
     /**

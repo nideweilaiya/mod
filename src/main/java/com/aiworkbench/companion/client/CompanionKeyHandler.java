@@ -1,6 +1,7 @@
 package com.aiworkbench.companion.client;
 
 import com.aiworkbench.companion.AICompanionMod;
+import com.aiworkbench.companion.client.gui.CompanionHUDOverlay;
 import com.aiworkbench.companion.client.gui.CompanionListScreen;
 import com.aiworkbench.companion.client.gui.CompanionInventoryScreen;
 import com.aiworkbench.companion.client.gui.CompanionSettingsScreen;
@@ -28,6 +29,7 @@ public class CompanionKeyHandler {
     public static final String KEY_TELEPORT = "key.aicompanion.teleport";
     public static final String KEY_FOLLOW_TOGGLE = "key.aicompanion.follow_toggle";
     public static final String KEY_FOLLOW_CANCEL = "key.aicompanion.follow_cancel";
+    public static final String KEY_TOGGLE_HUD = "key.aicompanion.toggle_hud";
 
     // Keys: C=list, G=settings, B=backpack, K=teleport, F=toggle follow, ESC=cancel task
     public static final KeyMapping OPEN_LIST_KEY = new KeyMapping(
@@ -68,6 +70,13 @@ public class CompanionKeyHandler {
         CATEGORY
     );
 
+    // H键 - 切换HUD显示/隐藏
+    public static final KeyMapping TOGGLE_HUD_KEY = new KeyMapping(
+        KEY_TOGGLE_HUD,
+        GLFW.GLFW_KEY_H,
+        CATEGORY
+    );
+
     // Cooldown tracking (client-side)
     private static final long TELEPORT_COOLDOWN_MS = 60000; // 1 minute
     private static long lastTeleportTime = 0;
@@ -82,6 +91,7 @@ public class CompanionKeyHandler {
             event.register(TELEPORT_KEY);
             event.register(FOLLOW_TOGGLE_KEY);
             event.register(FOLLOW_CANCEL_KEY);
+            event.register(TOGGLE_HUD_KEY);
         }
     }
 
@@ -141,6 +151,17 @@ public class CompanionKeyHandler {
             if (FOLLOW_CANCEL_KEY.consumeClick()) {
                 mc.player.connection.sendCommand("companion follow");
                 AICompanionMod.LOGGER.info("[KeyHandler] ESC key pressed: returning to follow mode");
+            }
+
+            // H 键 - 切换HUD显示/隐藏
+            if (TOGGLE_HUD_KEY.consumeClick()) {
+                CompanionHUDOverlay.toggleHUD();
+                mc.player.displayClientMessage(
+                    net.minecraft.network.chat.Component.literal(
+                        CompanionHUDOverlay.isHUDEnabled() ? "§aCompanion HUD: ON" : "§7Companion HUD: OFF"
+                    ),
+                    true
+                );
             }
         }
     }

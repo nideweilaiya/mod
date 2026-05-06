@@ -130,11 +130,11 @@ public class CompanionMineGoal extends Goal {
                 BlockState state = companion.level().getBlockState(targetBlock);
                 float hardness = state.getBlock().defaultDestroyTime();
 
-                // Accumulate progress proportional to hardness
-                // hardness=1.0 -> BASE_BREAK_TICKS_PER_HARDNESS ticks to break
-                // hardness=0.5 -> half the ticks
-                // hardness=2.0 -> double the ticks
-                accumulatedProgress += 1f / (hardness * BASE_BREAK_TICKS_PER_HARDNESS);
+                // Accumulate progress proportional to hardness and tool speed
+                // hardness=1.0, tool speed=1.0 -> BASE_BREAK_TICKS_PER_HARDNESS ticks
+                // hardness=1.0, diamond pick (speed=8) -> ticks / 8
+                float toolSpeed = companion.getToolDigSpeed(state);
+                accumulatedProgress += toolSpeed / (hardness * BASE_BREAK_TICKS_PER_HARDNESS);
                 isMining = true;
 
                 // Swing animation every 6 ticks
@@ -263,9 +263,10 @@ public class CompanionMineGoal extends Goal {
         // Remove the block
         level.setBlock(pos, net.minecraft.world.level.block.Blocks.AIR.defaultBlockState(), 3);
 
-        // Get drops - companion is the harvester entity (for Fortune), EMPTY is the tool
+        // Get drops - use equipped tool for fortune/silk touch
+        ItemStack heldTool = companion.getEquippedTool();
         List<ItemStack> drops = net.minecraft.world.level.block.Block.getDrops(state,
-            (net.minecraft.server.level.ServerLevel) level, pos, null, companion, ItemStack.EMPTY);
+            (net.minecraft.server.level.ServerLevel) level, pos, null, companion, heldTool);
 
         int collected = 0;
         for (ItemStack drop : drops) {

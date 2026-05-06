@@ -62,11 +62,11 @@ public class CompanionInventorySyncPacket {
     }
 
     public static NonNullList<ItemStack> reconstructInventory(ListTag itemsTag) {
-        NonNullList<ItemStack> items = NonNullList.withSize(27, ItemStack.EMPTY);
+        NonNullList<ItemStack> items = NonNullList.withSize(33, ItemStack.EMPTY);
         for (int i = 0; i < itemsTag.size(); i++) {
             CompoundTag itemTag = itemsTag.getCompound(i);
             int slot = itemTag.getInt("Slot");
-            if (slot >= 0 && slot < 27) {
+            if (slot >= 0 && slot < 33) {
                 items.set(slot, ItemStack.of(itemTag));
             }
         }

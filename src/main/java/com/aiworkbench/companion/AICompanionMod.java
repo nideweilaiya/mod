@@ -4,6 +4,8 @@ import com.aiworkbench.companion.client.CompanionKeyHandler;
 import com.aiworkbench.companion.command.CompanionCommands;
 import com.aiworkbench.companion.entity.EntityInit;
 import com.aiworkbench.companion.event.PlayerEventHandler;
+import com.aiworkbench.companion.item.ItemInit;
+import com.aiworkbench.companion.item.ModCreativeTab;
 import com.aiworkbench.companion.manager.CompanionManager;
 import com.aiworkbench.companion.manager.CharacterManager;
 import com.aiworkbench.companion.network.CompanionTCPServer;
@@ -42,6 +44,8 @@ public class AICompanionMod {
         // before FMLCommonSetupEvent and before EntityAttributeCreationEvent.
         // Entity attributes are then registered via EntityAttributeCreationEvent in EntityAttributeEvents.
         EntityInit.register(FMLJavaModLoadingContext.get().getModEventBus());
+        ItemInit.register(FMLJavaModLoadingContext.get().getModEventBus());
+        ModCreativeTab.register(FMLJavaModLoadingContext.get().getModEventBus());
 
         FMLJavaModLoadingContext.get().getModEventBus().addListener(this::commonSetup);
         FMLJavaModLoadingContext.get().getModEventBus().addListener(this::clientSetup);

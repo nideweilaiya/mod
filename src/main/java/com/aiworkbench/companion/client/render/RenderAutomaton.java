@@ -6,6 +6,8 @@ import net.minecraft.client.model.HumanoidModel;
 import net.minecraft.client.model.geom.ModelLayers;
 import net.minecraft.client.renderer.entity.EntityRendererProvider;
 import net.minecraft.client.renderer.entity.LivingEntityRenderer;
+import net.minecraft.client.renderer.entity.layers.HumanoidArmorLayer;
+import net.minecraft.client.renderer.entity.layers.ItemInHandLayer;
 import net.minecraft.resources.ResourceLocation;
 
 /**
@@ -17,6 +19,15 @@ public class RenderAutomaton extends LivingEntityRenderer<AutomatonEntity, Human
     public RenderAutomaton(EntityRendererProvider.Context context) {
         // 使用标准玩家 slim 模型层
         super(context, new HumanoidModel<>(context.bakeLayer(ModelLayers.PLAYER)), 0.5f);
+
+        // 盔甲渲染（使用 Forge 1.20.4 构造签名：Renderer + innerModel + outerModel + ModelManager）
+        this.addLayer(new HumanoidArmorLayer<>(this,
+            new HumanoidModel<>(context.bakeLayer(ModelLayers.PLAYER_INNER_ARMOR)),
+            new HumanoidModel<>(context.bakeLayer(ModelLayers.PLAYER_OUTER_ARMOR)),
+            context.getModelManager()));
+
+        // 手持物品渲染（剑、镐、斧等）
+        this.addLayer(new ItemInHandLayer<>(this, context.getItemInHandRenderer()));
     }
 
     @Override

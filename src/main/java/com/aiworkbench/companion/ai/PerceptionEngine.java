@@ -2,6 +2,8 @@ package com.aiworkbench.companion.ai;
 
 import com.aiworkbench.companion.AICompanionMod;
 import com.aiworkbench.companion.entity.AutomatonEntity;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
@@ -10,6 +12,7 @@ import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.animal.Animal;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
@@ -60,44 +63,65 @@ public class PerceptionEngine {
         // Urgency level
         public String urgency = "normal"; // "low", "normal", "high", "critical"
 
-        public String toJson() {
-            StringBuilder sb = new StringBuilder();
-            sb.append("{");
-            sb.append("\"companion_id\":\"").append(companionId).append("\",");
-            sb.append("\"x\":").append(position.getX()).append(",");
-            sb.append("\"y\":").append(position.getY()).append(",");
-            sb.append("\"z\":").append(position.getZ()).append(",");
-            sb.append("\"health\":").append(health).append(",");
-            sb.append("\"urgency\":\"").append(urgency).append("\",");
-            sb.append("\"danger\":{");
-            sb.append("\"lava\":").append(dangerLava).append(",");
-            sb.append("\"fire\":").append(dangerFire).append(",");
-            sb.append("\"fall\":").append(dangerFall).append(",");
-            sb.append("\"hostile\":").append(dangerHostile).append(",");
-            sb.append("\"suffocation\":").append(dangerSuffocation).append(",");
-            sb.append("\"low_health\":").append(dangerLowHealth);
-            sb.append("},");
-            sb.append("\"blocks\":[");
-            for (int i = 0; i < nearbyBlocks.size(); i++) {
-                if (i > 0) sb.append(",");
-                sb.append("\"").append(nearbyBlocks.get(i)).append("\"");
-            }
-            sb.append("],");
-            sb.append("\"entities\":[");
-            for (int i = 0; i < nearbyEntities.size(); i++) {
-                if (i > 0) sb.append(",");
-                sb.append("\"").append(nearbyEntities.get(i)).append("\"");
-            }
-            sb.append("],");
-            sb.append("\"resources\":[");
-            for (int i = 0; i < resources.size(); i++) {
-                if (i > 0) sb.append(",");
-                sb.append("\"").append(resources.get(i)).append("\"");
-            }
-            sb.append("]");
-            sb.append("}");
-            return sb.toString();
+    private static final Gson GSON = new GsonBuilder().create();
+
+    /**
+     * Represent the urgency level for JSON output
+     */
+    private static class DangerFlags {
+        boolean lava;
+        boolean fire;
+        boolean fall;
+        boolean hostile;
+        boolean suffocation;
+        boolean low_health;
+    }
+
+    /**
+     * JSON structure for perception data
+     */
+    private static class PerceptionDataJson {
+        String companion_id;
+        int x, y, z;
+        double health;
+        String urgency;
+        DangerFlags danger;
+        java.util.List<String> blocks = new java.util.ArrayList<>();
+        java.util.List<String> entities = new java.util.ArrayList<>();
+        java.util.List<String> resources = new java.util.ArrayList<>();
+    }
+
+    /**
+     * Serialize perception data to JSON using Gson.
+     * Previous version used manual String concatenation which produced invalid JSON
+     * when block names or entity names contained special characters.
+     */
+    public String toJson() {
+        PerceptionDataJson json = new PerceptionDataJson();
+        json.companion_id = this.companionId;
+        if (this.position != null) {
+            json.x = this.position.getX();
+            json.y = this.position.getY();
+            json.z = this.position.getZ();
         }
+        json.health = this.health;
+        json.urgency = this.urgency;
+
+        DangerFlags df = new DangerFlags();
+        df.lava = this.dangerLava;
+        df.fire = this.dangerFire;
+        df.fall = this.dangerFall;
+        df.hostile = this.dangerHostile;
+        df.suffocation = this.dangerSuffocation;
+        df.low_health = this.dangerLowHealth;
+        json.danger = df;
+
+        json.blocks = this.nearbyBlocks;
+        json.entities = this.nearbyEntities;
+        json.resources = this.resources;
+
+        return GSON.toJson(json);
+    }
     }
 
     /**
@@ -281,30 +305,111 @@ public class PerceptionEngine {
 
     /**
      * Gather full perception data for a companion
+     *
+     * 【O(n³) 扫描合并优化】
+     * 原本 detectDangers() 和 scanBlocks() 各自独立扫描方块区域，
+     * detectDangers 扫 DANGER_SCAN_RADIUS(6) = 13³ = 2197 个位置，
+     * scanBlocks 扫 BLOCK_SCAN_RADIUS(8) = 17³ = 4913 个位置。
+     * 合并后一次扫描 4913 位置，节省 2197 次冗余迭代。
+     *
+     * detectDangers() 保留不动（兼容外部调用），
+     * 但 gatherPerception 不再调用它，直接内联方块扫描。
      */
     public static PerceptionData gatherPerception(AutomatonEntity companion) {
-        PerceptionData data = detectDangers(companion);
+        PerceptionData data = new PerceptionData();
         Level level = companion.level();
 
-        if (level instanceof ServerLevel) {
-            ServerLevel serverLevel = (ServerLevel) level;
-            BlockPos pos = companion.blockPosition();
+        if (!(level instanceof ServerLevel serverLevel)) {
+            return data;
+        }
 
-            // Scan blocks
-            List<String> blockScan = scanBlocks(serverLevel, pos, BLOCK_SCAN_RADIUS);
-            data.nearbyBlocks = blockScan;
+        BlockPos pos = companion.blockPosition();
+        data.companionId = companion.getUUID().toString();
+        data.position = pos;
+        data.timestamp = System.currentTimeMillis();
+        data.health = companion.getHealth();
 
-            // Extract resources
-            List<String> resourceList = new ArrayList<>();
-            for (String block : blockScan) {
-                if (block.startsWith("resource:")) {
-                    resourceList.add(block.substring(9));
+        // ===== 单次方块扫描（合并 detectDangers 的方块检测 + scanBlocks）=====
+        List<String> blockScan = new ArrayList<>();
+        List<String> resourceList = new ArrayList<>();
+
+        for (int dx = -BLOCK_SCAN_RADIUS; dx <= BLOCK_SCAN_RADIUS; dx++) {
+            for (int dy = -BLOCK_SCAN_RADIUS; dy <= BLOCK_SCAN_RADIUS; dy++) {
+                for (int dz = -BLOCK_SCAN_RADIUS; dz <= BLOCK_SCAN_RADIUS; dz++) {
+                    BlockPos checkPos = pos.offset(dx, dy, dz);
+                    BlockState state = serverLevel.getBlockState(checkPos);
+                    Block block = state.getBlock();
+
+                    if (block == Blocks.AIR) continue;
+
+                    String blockName = block.builtInRegistryHolder().key().location().toString();
+
+                    // 危险方块检测（内联自 detectDangers，按 DANGER_SCAN_RADIUS 过滤）
+                    if (Math.abs(dx) <= DANGER_SCAN_RADIUS
+                        && Math.abs(dy) <= DANGER_SCAN_RADIUS
+                        && Math.abs(dz) <= DANGER_SCAN_RADIUS) {
+                        if (block == Blocks.LAVA || block == Blocks.MAGMA_BLOCK) {
+                            data.dangerLava = true;
+                        }
+                        if (block == Blocks.FIRE || block == Blocks.CAMPFIRE || block == Blocks.SOUL_CAMPFIRE) {
+                            data.dangerFire = true;
+                        }
+                    }
+
+                    // 方块分类（同 scanBlocks 逻辑）
+                    if (isDangerous(block)) {
+                        blockScan.add("danger:" + blockName);
+                    } else if (isResource(block)) {
+                        blockScan.add("resource:" + blockName);
+                        resourceList.add(blockName);
+                    }
                 }
             }
-            data.resources = resourceList;
+        }
 
-            // Scan entities
-            data.nearbyEntities = scanEntities(serverLevel, pos, ENTITY_SCAN_RADIUS);
+        data.nearbyBlocks = blockScan;
+        data.resources = resourceList;
+
+        // ===== 实体扫描（不变） =====
+        data.nearbyEntities = scanEntities(serverLevel, pos, ENTITY_SCAN_RADIUS);
+
+        // ===== 非方块危险检测（原 detectDangers 的实体/坠落/窒息/血量部分）=====
+        // 敌对生物
+        AABB hostileBox = new AABB(pos).inflate(ENTITY_SCAN_RADIUS);
+        List<Mob> hostileMobs = serverLevel.getEntitiesOfClass(Mob.class, hostileBox,
+            mob -> mob instanceof Monster
+                && mob.distanceToSqr(companion) <= ENTITY_SCAN_RADIUS * ENTITY_SCAN_RADIUS);
+        data.dangerHostile = !hostileMobs.isEmpty();
+
+        // 窒息
+        BlockPos below = pos.below();
+        BlockState belowState = serverLevel.getBlockState(below);
+        boolean belowIsAir = belowState.isAir();
+        if (!belowIsAir && companion.fallDistance == 0 && companion.onGround()) {
+            if (!serverLevel.getBlockState(pos).isAir()) {
+                data.dangerSuffocation = true;
+            }
+        }
+
+        // 坠落
+        if (companion.fallDistance > FALL_DAMAGE_HEIGHT && belowIsAir) {
+            data.dangerFall = true;
+        }
+
+        // 低血量
+        if (data.health <= LOW_HEALTH_THRESHOLD) {
+            data.dangerLowHealth = true;
+        }
+
+        // ===== 紧急度判定（同 detectDangers 逻辑）=====
+        if (data.dangerLava || data.dangerFall || data.dangerLowHealth) {
+            data.urgency = "critical";
+        } else if (data.dangerHostile || data.dangerSuffocation) {
+            data.urgency = "high";
+        } else if (data.dangerFire) {
+            data.urgency = "normal";
+        } else {
+            data.urgency = "low";
         }
 
         return data;

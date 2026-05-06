@@ -12,27 +12,31 @@ import net.minecraft.nbt.Tag;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
-import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.ai.goal.LookAtPlayerGoal;
 import net.minecraft.world.entity.ai.goal.RandomLookAroundGoal;
 import net.minecraft.world.entity.Mob;
-import net.minecraft.world.entity.monster.Monster;
+import net.minecraft.world.entity.PathfinderMob;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.enchantment.EnchantmentHelper;
+import net.minecraft.world.item.enchantment.Enchantments;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.Optional;
 import java.util.UUID;
 
 import net.minecraft.core.NonNullList;
 
-public class AutomatonEntity extends Monster {
+public class AutomatonEntity extends PathfinderMob {
     // ==================== Data Accessors ====================
 
     private static final EntityDataAccessor<String> DATA_CUSTOM_NAME =
@@ -46,6 +50,14 @@ public class AutomatonEntity extends Monster {
         SynchedEntityData.defineId(AutomatonEntity.class, EntityDataSerializers.INT);
     private static final EntityDataAccessor<String> DATA_SKIN_VALUE =
         SynchedEntityData.defineId(AutomatonEntity.class, EntityDataSerializers.STRING);
+
+    // Working mode string for HUD sync (auto-synced to clients via EntityDataAccessor)
+    private static final EntityDataAccessor<String> DATA_WORKING_MODE =
+        SynchedEntityData.defineId(AutomatonEntity.class, EntityDataSerializers.STRING);
+
+    // Owner UUID for client-side sync (auto-synced via EntityDataAccessor)
+    private static final EntityDataAccessor<Optional<UUID>> DATA_OWNER_UUID =
+        SynchedEntityData.defineId(AutomatonEntity.class, EntityDataSerializers.OPTIONAL_UUID);
 
     // ==================== Fields ====================
 
@@ -64,6 +76,11 @@ public class AutomatonEntity extends Monster {
     private boolean guardModeEnabled = false;
     private net.minecraft.world.entity.LivingEntity guardTarget = null;
     private static final double ATTACK_REACH = 3.0D;  // Melee attack reach (increased for better hitting)
+
+    // ==================== Auto-Defend (Always Active) ====================
+    @Nullable
+    private net.minecraft.world.entity.LivingEntity autoDefendTarget = null;
+    private int autoDefendTicks = 0;
 
     // ==================== Mine Mode (Task System) ====================
     private boolean mineModeEnabled = false;
@@ -113,6 +130,16 @@ public class AutomatonEntity extends Monster {
     private static final int INVENTORY_SIZE = 27;  // 3 rows x 9 columns
     private NonNullList<ItemStack> inventory = NonNullList.withSize(INVENTORY_SIZE, ItemStack.EMPTY);
 
+    // ==================== Health & Regen ====================
+    private int lastHurtTime = -200; // Tick when last damaged (negative = full health at start)
+    private boolean respawnPending = false; // Prevent double-respawn scheduling
+
+    // ==================== Auto-Recall Fields ====================
+    private static final double RECALL_DISTANCE_SQ = 1024.0; // 32^2 blocks
+    private static final int RECALL_WARNING_TICKS = 100; // 5 seconds (5 * 20)
+    private int recallWarningTicks = 0;
+    private boolean recallWarningActive = false;
+
     // ==================== Constructor ====================
 
     public AutomatonEntity(EntityType<? extends AutomatonEntity> type, Level level) {
@@ -120,6 +147,35 @@ public class AutomatonEntity extends Monster {
         // Note: stepHeight is controlled by PathfinderMob.getStepHeight()
         // Default step height for PathfinderMob is 0.6 blocks
         // JumpGoal handles terrain-aware jumping instead
+    }
+
+    // ==================== Sound Effects ====================
+
+    @Override
+    public void onAddedToWorld() {
+        super.onAddedToWorld();
+        // Play spawn sound (server broadcasts to all nearby players)
+        if (!this.level().isClientSide) {
+            this.playSound(net.minecraft.sounds.SoundEvents.ENDERMAN_TELEPORT, 1.0f, 1.0f);
+        }
+    }
+
+    public void playHealSound() {
+        if (!this.level().isClientSide) {
+            this.playSound(net.minecraft.sounds.SoundEvents.GENERIC_EAT, 1.0f, 1.2f);
+        }
+    }
+
+    public void playTeleportSound() {
+        if (!this.level().isClientSide) {
+            this.playSound(net.minecraft.sounds.SoundEvents.ENDERMAN_TELEPORT, 1.0f, 1.0f);
+        }
+    }
+
+    public void playModeSwitchSound() {
+        if (!this.level().isClientSide) {
+            this.playSound(net.minecraft.sounds.SoundEvents.ITEM_PICKUP, 1.0f, 1.5f);
+        }
     }
 
     // ==================== Entity Data ====================
@@ -132,6 +188,8 @@ public class AutomatonEntity extends Monster {
         this.entityData.define(DATA_CHARACTER_ID, "");
         this.entityData.define(DATA_SKIN_TYPE, 0);
         this.entityData.define(DATA_SKIN_VALUE, "");
+        this.entityData.define(DATA_WORKING_MODE, "follow");
+        this.entityData.define(DATA_OWNER_UUID, Optional.empty());
     }
 
     // ==================== Attribute Supplier ====================
@@ -200,6 +258,104 @@ public class AutomatonEntity extends Monster {
         return !isEssential;
     }
 
+    /**
+     * Track damage time for passive regen cooldown.
+     */
+    @Override
+    public boolean hurt(net.minecraft.world.damagesource.DamageSource source, float amount) {
+        this.lastHurtTime = this.tickCount;
+        return super.hurt(source, amount);
+    }
+
+    // ==================== Death & Respawn ====================
+
+    @Override
+    public void die(net.minecraft.world.damagesource.DamageSource source) {
+        // Death sound (broadcast to nearby players)
+        if (!this.level().isClientSide) {
+            this.playSound(net.minecraft.sounds.SoundEvents.PLAYER_DEATH, 1.0f, 0.8f);
+        }
+        // Drop inventory items and schedule respawn (server-side only)
+        if (!this.level().isClientSide && !respawnPending) {
+            respawnPending = true;
+
+            // Find owner player before removing from manager
+            String customName = this.getCustomName() != null ? this.getCustomName().getString() : "Companion";
+            ServerPlayer owner = getOwner();
+
+            dropInventoryItems();
+
+            // Remove from manager so player can't interact with dead companion
+            if (AICompanionMod.companionManager != null && ownerUUID != null) {
+                AICompanionMod.companionManager.removeCompanion(ownerUUID);
+            }
+
+            // Notify owner
+            if (owner != null) {
+                owner.sendSystemMessage(net.minecraft.network.chat.Component.literal(
+                    "§c" + customName + " died! Respawning in 30 seconds..."));
+            }
+
+            scheduleRespawn();
+        }
+        super.die(source);
+    }
+
+    /**
+     * Drop all inventory items as ItemEntities on the ground.
+     */
+    private void dropInventoryItems() {
+        for (int i = 0; i < INVENTORY_SIZE; i++) {
+            ItemStack stack = this.inventory.get(i);
+            if (!stack.isEmpty()) {
+                this.spawnAtLocation(stack);
+                this.inventory.set(i, ItemStack.EMPTY);
+            }
+        }
+    }
+
+    /**
+     * Schedule a respawn task 30 seconds (600 ticks) later.
+     */
+    private void scheduleRespawn() {
+        if (this.level().isClientSide || ownerUUID == null) return;
+
+        UUID ownerUuid = ownerUUID;
+        String charId = characterId;
+        net.minecraft.server.MinecraftServer server = this.level().getServer();
+        if (server == null) return;
+
+        server.tell(new net.minecraft.server.TickTask(
+            server.getTickCount() + 600,
+            () -> {
+                // Find the player across all dimensions
+                ServerPlayer player = null;
+                ServerLevel targetLevel = null;
+                for (ServerLevel sl : AICompanionMod.server.getAllLevels()) {
+                    ServerPlayer p = (ServerPlayer) sl.getPlayerByUUID(ownerUuid);
+                    if (p != null) {
+                        player = p;
+                        targetLevel = sl;
+                        break;
+                    }
+                }
+                if (player == null || targetLevel == null) return;
+
+                // Create new companion at player's position
+                AutomatonEntity newCompanion = AutomatonEntity.create(targetLevel, charId, player);
+                targetLevel.addFreshEntity(newCompanion);
+                newCompanion.showDialogue("§a我回来了！", 80);
+
+                // Re-register with manager
+                if (AICompanionMod.companionManager != null) {
+                    AICompanionMod.companionManager.addCompanion(ownerUuid, newCompanion);
+                }
+
+                player.sendSystemMessage(net.minecraft.network.chat.Component.literal("§a你的同伴已复活！"));
+            }
+        ));
+    }
+
     @Override
     public void tick() {
         super.tick();
@@ -212,6 +368,10 @@ public class AutomatonEntity extends Monster {
                 this.setCustomNameVisible(false);
                 this.setCustomName(net.minecraft.network.chat.Component.literal(" "));
                 dialogueText = "";
+            }
+            // Auto-recall still works when hidden
+            if (tickCount % 20 == 0) {
+                checkAutoRecall();
             }
             return;
         }
@@ -226,6 +386,10 @@ public class AutomatonEntity extends Monster {
                 this.setCustomName(net.minecraft.network.chat.Component.literal(" "));
                 dialogueText = "";
             }
+            // Auto-recall still works when movement stopped
+            if (tickCount % 20 == 0) {
+                checkAutoRecall();
+            }
             return;
         }
 
@@ -234,6 +398,36 @@ public class AutomatonEntity extends Monster {
 
         // Patrol behavior - wander around patrol center
         tickPatrol();
+
+        // Passive health regen (server-side only) - 1 HP/sec after 5 seconds without damage
+        if (!this.level().isClientSide && tickCount % 20 == 0) {
+            if (tickCount - lastHurtTime > 100 && this.getHealth() < this.getMaxHealth()) {
+                this.heal(1.0f);
+            }
+        }
+
+        // Auto-defend: track and attack whoever hurt the owner recently
+        if (autoDefendTicks > 0) {
+            autoDefendTicks--;
+            if (autoDefendTarget != null && autoDefendTarget.isAlive()) {
+                // Navigate toward target
+                this.getNavigation().moveTo(autoDefendTarget, 1.2);
+                this.getLookControl().setLookAt(autoDefendTarget, 10.0F, 30.0F);
+                // Attack if in range
+                if (this.distanceToSqr(autoDefendTarget) <= ATTACK_REACH * ATTACK_REACH) {
+                    this.swing(net.minecraft.world.InteractionHand.MAIN_HAND);
+                    this.doHurtTarget(autoDefendTarget);
+                }
+            } else {
+                autoDefendTarget = null;
+                autoDefendTicks = 0;
+            }
+        }
+
+        // Auto-recall check every second
+        if (tickCount % 20 == 0) {
+            checkAutoRecall();
+        }
 
         if (tickCount % 100 == 0) {
             Vec3 pos = this.position();
@@ -270,32 +464,113 @@ public class AutomatonEntity extends Monster {
     private void pickupNearbyItems() {
         if (this.level().isClientSide) return;
 
-        double pickupRadius = 2.5;
-        net.minecraft.world.phys.AABB bounds = new net.minecraft.world.phys.AABB(
-            this.getX() - pickupRadius, this.getY() - 0.5, this.getZ() - pickupRadius,
-            this.getX() + pickupRadius, this.getY() + 1.5, this.getZ() + pickupRadius
+        double pickupRadius = 5.0; // Increased from 2.5
+        net.minecraft.world.phys.AABB pickupBounds = new net.minecraft.world.phys.AABB(
+            this.getX() - pickupRadius, this.getY() - 1.0, this.getZ() - pickupRadius,
+            this.getX() + pickupRadius, this.getY() + 2.0, this.getZ() + pickupRadius
         );
 
-        java.util.List<net.minecraft.world.entity.item.ItemEntity> nearbyItems =
-            this.level().getEntitiesOfClass(net.minecraft.world.entity.item.ItemEntity.class, bounds);
+        // When not in follow mode, actively walk toward nearby items
+        if (!followModeActive && this.navigation.isDone()) {
+            double scanRadius = 10.0;
+            net.minecraft.world.phys.AABB scanBounds = new net.minecraft.world.phys.AABB(
+                this.getX() - scanRadius, this.getY() - 2.0, this.getZ() - scanRadius,
+                this.getX() + scanRadius, this.getY() + 3.0, this.getZ() + scanRadius
+            );
+            net.minecraft.world.entity.item.ItemEntity nearest = null;
+            double nearestDistSq = Double.MAX_VALUE;
+            for (net.minecraft.world.entity.item.ItemEntity item :
+                    this.level().getEntitiesOfClass(net.minecraft.world.entity.item.ItemEntity.class, scanBounds)) {
+                if (item.isPickable() && item.isAlive() && item.tickCount > 10) {
+                    double d = this.distanceToSqr(item);
+                    if (d < nearestDistSq) {
+                        nearestDistSq = d;
+                        nearest = item;
+                    }
+                }
+            }
+            // Walk toward nearest item if beyond immediate pickup range
+            if (nearest != null && nearestDistSq > pickupRadius * pickupRadius) {
+                this.navigation.moveTo(nearest, 1.0);
+            }
+        }
 
+        // Pick up items in range
         int picked = 0;
-        for (net.minecraft.world.entity.item.ItemEntity item : nearbyItems) {
-            // Only pick up items that are on the ground long enough (not freshly spawned)
+        for (net.minecraft.world.entity.item.ItemEntity item :
+                this.level().getEntitiesOfClass(net.minecraft.world.entity.item.ItemEntity.class, pickupBounds)) {
             if (item.isPickable() && item.isAlive() && item.tickCount > 10) {
                 ItemStack stack = item.getItem();
                 if (addItemToInventory(stack)) {
                     item.discard();
                     picked++;
                 }
-                // If inventory full, stop trying
                 if (!hasInventorySpace()) break;
             }
         }
 
         if (picked > 0) {
             AICompanionMod.LOGGER.info("[AutomatonEntity] Picked up " + picked + " item stacks");
+            autoEquip();
         }
+    }
+
+    // ==================== Auto-Equip System ====================
+
+    /**
+     * Scan inventory and auto-equip the best weapons and armor.
+     * Compares attack damage for weapons, armor value for armor pieces.
+     */
+    private void autoEquip() {
+        if (this.level().isClientSide) return;
+
+        for (int i = 0; i < INVENTORY_SIZE; i++) {
+            ItemStack stack = this.inventory.get(i);
+            if (stack.isEmpty()) continue;
+
+            EquipmentSlot naturalSlot = Mob.getEquipmentSlotForItem(stack);
+            ItemStack currentlyEquipped = this.getItemBySlot(naturalSlot);
+
+            // Skip if current equipment is better or equal
+            if (!currentlyEquipped.isEmpty() && !isEquipmentUpgrade(stack, currentlyEquipped, naturalSlot)) {
+                continue;
+            }
+
+            // Swap: put currently equipped item into inventory, equip new item
+            this.inventory.set(i, currentlyEquipped.copy());
+            this.setItemSlot(naturalSlot, stack.copy());
+        }
+    }
+
+    /**
+     * Compare two items for the given equipment slot.
+     * Returns true if newItem is an upgrade over currentItem.
+     */
+    private boolean isEquipmentUpgrade(ItemStack newItem, ItemStack currentItem, EquipmentSlot slot) {
+        double newVal = getEquipmentScore(newItem, slot);
+        double curVal = getEquipmentScore(currentItem, slot);
+        // Only upgrade if new item is at least 1 point better (avoids rapid swapping)
+        return newVal > curVal + 1.0;
+    }
+
+    /**
+     * Score an item for a given equipment slot.
+     * Weighs attack damage (x2), armor (x1), and toughness (x0.5).
+     */
+    private double getEquipmentScore(ItemStack stack, EquipmentSlot slot) {
+        double score = 0;
+        for (var entry : stack.getAttributeModifiers(slot).entries()) {
+            net.minecraft.world.entity.ai.attributes.Attribute attr = entry.getKey();
+            double amount = entry.getValue().getAmount();
+            if (attr.equals(Attributes.ATTACK_DAMAGE)) {
+                score += amount * 2.0;
+            } else if (attr.equals(Attributes.ARMOR)) {
+                score += amount;
+            } else if (attr.equals(Attributes.ARMOR_TOUGHNESS)) {
+                score += amount * 0.5;
+            }
+        }
+        return score;
     }
 
     /**
@@ -471,11 +746,19 @@ public class AutomatonEntity extends Monster {
             // Gather perception data
             PerceptionEngine.PerceptionData data = PerceptionEngine.gatherPerception(this);
 
-            // Send position update
+            // Send position update via TCPServer
             AICompanionMod.tcpServer.onPositionUpdate(
                 this.getUUID().toString(),
                 this.blockPosition()
             );
+
+            // Also send position update via BridgeClient
+            if (AICompanionMod.bridgeClient != null && AICompanionMod.bridgeClient.isConnected()) {
+                AICompanionMod.bridgeClient.sendPositionUpdate(
+                    this.getUUID().toString(),
+                    this.blockPosition()
+                );
+            }
 
             // Send danger alerts if critical
             if ("critical".equals(data.urgency)) {
@@ -503,6 +786,7 @@ public class AutomatonEntity extends Monster {
         entity.characterId = characterId;
         if (owner != null) {
             entity.ownerUUID = owner.getUUID();
+            entity.entityData.set(DATA_OWNER_UUID, Optional.of(owner.getUUID()));
             entity.setPos(owner.getX() + 2, owner.getY(), owner.getZ() + 2);
             // Set display name based on owner
             entity.setCustomName(net.minecraft.network.chat.Component.literal(owner.getName().getString() + "'s Companion"));
@@ -521,6 +805,7 @@ public class AutomatonEntity extends Monster {
         }
         if (tag.hasUUID("OwnerUUID")) {
             this.ownerUUID = tag.getUUID("OwnerUUID");
+            this.entityData.set(DATA_OWNER_UUID, Optional.of(this.ownerUUID));
         }
         if (tag.contains("IsEssential")) {
             this.isEssential = tag.getBoolean("IsEssential");
@@ -558,6 +843,18 @@ public class AutomatonEntity extends Monster {
                 }
             }
         }
+        // Load working mode
+        if (tag.contains("WorkingMode")) {
+            String mode = tag.getString("WorkingMode");
+            this.entityData.set(DATA_WORKING_MODE, mode);
+            switch (mode) {
+                case "guard" -> { guardModeEnabled = true; followModeActive = false; }
+                case "mine" -> { mineModeEnabled = true; followModeActive = false; }
+                case "chop" -> { chopModeEnabled = true; followModeActive = false; }
+                case "patrol" -> { patrolModeEnabled = true; followModeActive = false; }
+                default -> { followModeActive = true; }
+            }
+        }
     }
 
     @Override
@@ -581,6 +878,9 @@ public class AutomatonEntity extends Monster {
             homeTag.putInt("Z", homePos.getZ());
             tag.put("HomePos", homeTag);
         }
+        // Save working mode
+        tag.putString("WorkingMode", this.entityData.get(DATA_WORKING_MODE));
+
         // Save inventory
         ListTag inventoryTag = new ListTag();
         for (int i = 0; i < INVENTORY_SIZE; i++) {
@@ -598,7 +898,21 @@ public class AutomatonEntity extends Monster {
     // ==================== Getters and Setters ====================
 
     public UUID getOwnerUUID() { return ownerUUID; }
-    public void setOwnerUUID(UUID uuid) { this.ownerUUID = uuid; }
+    public void setOwnerUUID(UUID uuid) {
+        this.ownerUUID = uuid;
+        if (uuid != null) {
+            this.entityData.set(DATA_OWNER_UUID, Optional.of(uuid));
+        } else {
+            this.entityData.set(DATA_OWNER_UUID, Optional.empty());
+        }
+    }
+    /**
+     * Get the owner UUID from the data accessor (auto-synced to client).
+     * Used by CompanionClientState to find this player's companion.
+     */
+    public Optional<UUID> getDataOwnerUUID() {
+        return this.entityData.get(DATA_OWNER_UUID);
+    }
     public String getCharacterId() { return characterId; }
     public void setCharacterId(String id) { this.characterId = id; }
     public boolean isEssential() { return isEssential; }
@@ -616,8 +930,12 @@ public class AutomatonEntity extends Monster {
         if (ownerUUID == null || getServer() == null) {
             return null;
         }
-        Player player = getServer().getLevel(level().dimension()).getPlayerByUUID(ownerUUID);
-        return player instanceof ServerPlayer ? (ServerPlayer) player : null;
+        // Search all dimensions - supports cross-dimension tracking
+        for (ServerLevel sl : getServer().getAllLevels()) {
+            Player player = sl.getPlayerByUUID(ownerUUID);
+            if (player instanceof ServerPlayer sp) return sp;
+        }
+        return null;
     }
 
     /**
@@ -654,6 +972,7 @@ public class AutomatonEntity extends Monster {
             setMineModeEnabled(false);
             setChopModeEnabled(false);
             followModeActive = false;
+            this.entityData.set(DATA_WORKING_MODE, "guard");
             showDialogue("切换到守护模式", 60);
             AICompanionMod.LOGGER.info("[AutomatonEntity] F key: Switched to guard mode");
         } else if (guardModeEnabled) {
@@ -661,6 +980,7 @@ public class AutomatonEntity extends Monster {
             setGuardModeEnabled(false);
             setMineModeEnabled(true);
             setChopModeEnabled(false);
+            this.entityData.set(DATA_WORKING_MODE, "mine");
             showDialogue("切换到挖掘模式", 60);
             AICompanionMod.LOGGER.info("[AutomatonEntity] F key: Switched to mine mode");
         } else if (mineModeEnabled) {
@@ -668,6 +988,7 @@ public class AutomatonEntity extends Monster {
             setGuardModeEnabled(false);
             setMineModeEnabled(false);
             setChopModeEnabled(true);
+            this.entityData.set(DATA_WORKING_MODE, "chop");
             showDialogue("切换到砍伐模式", 60);
             AICompanionMod.LOGGER.info("[AutomatonEntity] F key: Switched to chop mode");
         } else if (chopModeEnabled) {
@@ -676,11 +997,13 @@ public class AutomatonEntity extends Monster {
             setMineModeEnabled(false);
             setChopModeEnabled(false);
             followModeActive = true;
+            this.entityData.set(DATA_WORKING_MODE, "follow");
             showDialogue("切换到跟随模式", 60);
             AICompanionMod.LOGGER.info("[AutomatonEntity] F key: Switched to follow mode");
         } else {
             // Fallback -> Follow
             followModeActive = true;
+            this.entityData.set(DATA_WORKING_MODE, "follow");
             showDialogue("切换到跟随模式", 60);
         }
         return followModeActive;
@@ -691,10 +1014,12 @@ public class AutomatonEntity extends Monster {
      * Disables all task modes and sets followModeActive to true
      */
     public void returnToFollow() {
+        playModeSwitchSound();
         setGuardModeEnabled(false);
         setMineModeEnabled(false);
         setChopModeEnabled(false);
         followModeActive = true;
+        this.entityData.set(DATA_WORKING_MODE, "follow");
         showDialogue("返回跟随模式", 60);
         AICompanionMod.LOGGER.info("[AutomatonEntity] ESC: Returned to follow mode");
     }
@@ -756,6 +1081,7 @@ public class AutomatonEntity extends Monster {
     }
 
     public void setPatrolModeEnabled(boolean enabled) {
+        playModeSwitchSound();
         this.patrolModeEnabled = enabled;
         if (enabled) {
             this.patrolCenter = this.getOnPos();
@@ -763,9 +1089,11 @@ public class AutomatonEntity extends Monster {
             setMineModeEnabled(false);
             setChopModeEnabled(false);
             followModeActive = false;
+            this.entityData.set(DATA_WORKING_MODE, "patrol");
             showDialogue("巡逻模式", 60);
             AICompanionMod.LOGGER.info("[AutomatonEntity] Patrol mode enabled at {}", patrolCenter);
         } else {
+            this.entityData.set(DATA_WORKING_MODE, "follow");
             showDialogue("退出巡逻", 40);
             AICompanionMod.LOGGER.info("[AutomatonEntity] Patrol mode disabled");
         }
@@ -778,6 +1106,7 @@ public class AutomatonEntity extends Monster {
     public void teleportToOwner() {
         ServerPlayer owner = getOwner();
         if (owner != null) {
+            playTeleportSound();
             teleportTo(owner.getX(), owner.getY(), owner.getZ());
             setDeltaMovement(0, 0, 0);
             fallDistance = 0;
@@ -902,6 +1231,44 @@ public class AutomatonEntity extends Monster {
         }
     }
 
+    // ==================== Equipment Helpers ====================
+
+    /**
+     * Get the currently equipped main hand item (weapon/tool)
+     */
+    public ItemStack getEquippedTool() {
+        return this.getItemBySlot(EquipmentSlot.MAINHAND);
+    }
+
+    /**
+     * Get the dig speed of the currently equipped tool against a block state.
+     * Returns 1.0f if no tool is held (matches hand speed).
+     */
+    public float getToolDigSpeed(BlockState state) {
+        ItemStack tool = getEquippedTool();
+        if (tool.isEmpty()) return 1.0f;
+        return Math.max(tool.getDestroySpeed(state), 1.0f);
+    }
+
+    /**
+     * Get the fortune level on the currently held tool
+     */
+    public int getFortuneLevel() {
+        ItemStack tool = getEquippedTool();
+        return EnchantmentHelper.getItemEnchantmentLevel(Enchantments.BLOCK_FORTUNE, tool);
+    }
+
+    // ==================== Auto-Defend ====================
+
+    /**
+     * Set an auto-defend target (e.g. when owner is attacked).
+     * Companion will attack this target for the given duration regardless of current mode.
+     */
+    public void setAutoDefendTarget(@Nullable net.minecraft.world.entity.LivingEntity target, int ticks) {
+        this.autoDefendTarget = target;
+        this.autoDefendTicks = ticks;
+    }
+
     // ==================== Guard Mode (LivingEntity Combat) ====================
 
     /**
@@ -915,10 +1282,12 @@ public class AutomatonEntity extends Monster {
      * Enable or disable guard mode
      */
     public void setGuardModeEnabled(boolean enabled) {
+        playModeSwitchSound();
         this.guardModeEnabled = enabled;
         if (!enabled) {
             this.guardTarget = null;
         }
+        this.entityData.set(DATA_WORKING_MODE, enabled ? "guard" : getModeDataString());
         AICompanionMod.LOGGER.info("[AutomatonEntity] Guard mode: " + (enabled ? "ENABLED" : "DISABLED"));
     }
 
@@ -980,7 +1349,9 @@ public class AutomatonEntity extends Monster {
      * Enable or disable mine mode
      */
     public void setMineModeEnabled(boolean enabled) {
+        playModeSwitchSound();
         this.mineModeEnabled = enabled;
+        this.entityData.set(DATA_WORKING_MODE, enabled ? "mine" : getModeDataString());
         AICompanionMod.LOGGER.info("[AutomatonEntity] Mine mode: " + (enabled ? "ENABLED" : "DISABLED"));
     }
 
@@ -997,7 +1368,9 @@ public class AutomatonEntity extends Monster {
      * Enable or disable chop mode
      */
     public void setChopModeEnabled(boolean enabled) {
+        playModeSwitchSound();
         this.chopModeEnabled = enabled;
+        this.entityData.set(DATA_WORKING_MODE, enabled ? "chop" : getModeDataString());
         AICompanionMod.LOGGER.info("[AutomatonEntity] Chop mode: " + (enabled ? "ENABLED" : "DISABLED"));
     }
 
@@ -1049,6 +1422,103 @@ public class AutomatonEntity extends Monster {
         if (mineModeEnabled) return "§b挖掘中";
         if (chopModeEnabled) return "§6砍伐中";
         return "§a跟随中";
+    }
+
+    /**
+     * Get the working mode string for HUD sync.
+     * Returns a short English string: "follow", "guard", "mine", "chop"
+     */
+    public String getWorkingMode() {
+        return this.entityData.get(DATA_WORKING_MODE);
+    }
+
+    /**
+     * Get the mode data string based on current state (for mode transitions).
+     */
+    private String getModeDataString() {
+        if (guardModeEnabled) return "guard";
+        if (mineModeEnabled) return "mine";
+        if (chopModeEnabled) return "chop";
+        if (followModeActive) return "follow";
+        return "follow";
+    }
+
+    // ==================== Auto-Recall System ====================
+
+    /**
+     * Check if the companion should auto-recall to the owner.
+     * - Cross-dimension: teleport after 5 second warning
+     * - Same-dimension distance > 32 blocks: teleport after 5 second warning
+     * Resets warning when owner comes back within range.
+     */
+    private void checkAutoRecall() {
+        if (this.level().isClientSide) return;
+
+        ServerPlayer owner = getOwner();
+        if (owner == null) return;
+
+        // Cross-dimension: teleport to owner's dimension immediately with warning
+        if (!owner.level().dimension().equals(this.level().dimension())) {
+            if (!recallWarningActive) {
+                recallWarningActive = true;
+                recallWarningTicks = 0;
+                showDialogue("§d主人穿越了维度！", 80);
+            } else {
+                recallWarningTicks += 20;
+                if (recallWarningTicks >= RECALL_WARNING_TICKS) {
+                    doCrossDimensionRecall(owner);
+                    recallWarningActive = false;
+                    recallWarningTicks = 0;
+                }
+            }
+            return;
+        }
+
+        // Same-dimension distance check
+        double distSq = this.distanceToSqr(owner);
+
+        if (distSq > RECALL_DISTANCE_SQ) {
+            if (!recallWarningActive) {
+                recallWarningActive = true;
+                recallWarningTicks = 0;
+                showDialogue("§e主人太远了！5秒后传送...", 80);
+            } else {
+                recallWarningTicks += 20;
+                if (recallWarningTicks >= RECALL_WARNING_TICKS) {
+                    playTeleportSound();
+                    this.teleportTo(owner.getX(), owner.getY(), owner.getZ());
+                    this.setDeltaMovement(0, 0, 0);
+                    this.fallDistance = 0;
+                    showDialogue("§a传送完成！", 60);
+                    recallWarningActive = false;
+                    recallWarningTicks = 0;
+                }
+            }
+        } else {
+            if (recallWarningActive) {
+                recallWarningActive = false;
+                recallWarningTicks = 0;
+                showDialogue("§a已跟上主人", 40);
+            }
+        }
+    }
+
+    /**
+     * Cross-dimension recall: teleport companion to owner's current dimension.
+     */
+    private void doCrossDimensionRecall(ServerPlayer owner) {
+        ServerLevel targetLevel = (ServerLevel) owner.level();
+        playTeleportSound();
+        this.teleportTo(targetLevel, owner.getX(), owner.getY(), owner.getZ(),
+            java.util.Set.of(), owner.getYRot(), owner.getXRot());
+        this.setDeltaMovement(0, 0, 0);
+        this.fallDistance = 0;
+        showDialogue("§d穿越维度完成！", 60);
+
+        // Update CompanionManager registration
+        if (AICompanionMod.companionManager != null) {
+            AICompanionMod.companionManager.addCompanion(ownerUUID, this);
+        }
     }
 
     /**

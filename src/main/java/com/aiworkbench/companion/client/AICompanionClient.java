@@ -1,11 +1,14 @@
 package com.aiworkbench.companion.client;
 
 import com.aiworkbench.companion.AICompanionMod;
+import com.aiworkbench.companion.client.gui.CompanionHUDOverlay;
 import com.aiworkbench.companion.client.render.RenderAutomaton;
 import com.aiworkbench.companion.entity.EntityInit;
 import net.minecraft.world.entity.Entity;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.EntityRenderersEvent;
+import net.minecraftforge.client.event.RegisterGuiOverlaysEvent;
+import net.minecraftforge.client.gui.overlay.VanillaGuiOverlay;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
@@ -40,7 +43,14 @@ public class AICompanionClient {
     @SubscribeEvent
     public static void onClientSetup(FMLClientSetupEvent event) {
         AICompanionMod.LOGGER.info("AI Companion Client setup complete");
-        // K键功能将在后续版本实现
+    }
+
+    @SubscribeEvent
+    public static void registerOverlays(RegisterGuiOverlaysEvent event) {
+        event.registerAbove(VanillaGuiOverlay.HOTBAR.id(), "companion_hud",
+            (gui, guiGraphics, partialTick, screenWidth, screenHeight) ->
+                CompanionHUDOverlay.render(guiGraphics, partialTick, screenWidth, screenHeight));
+        AICompanionMod.LOGGER.info("Companion HUD overlay registered");
     }
 
     /**

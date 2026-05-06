@@ -22,10 +22,15 @@ public class CompanionInventoryScreen extends Screen {
     private static final int SLOT_SPACING = 4;
     private static final int COMPANION_COLS = 9;
     private static final int COMPANION_ROWS = 3;
-    private static final int COMPANION_SLOTS = COMPANION_COLS * COMPANION_ROWS; // 27
+    private static final int COMPANION_SLOTS = COMPANION_COLS * COMPANION_ROWS; // 27 存储槽
+    private static final int EQUIPMENT_SLOTS = 6; // mainhand, offhand, feet, legs, chest, head
+    private static final int EQUIPMENT_ROW_HEIGHT = 28;
+    private static final int TOTAL_SLOTS = COMPANION_SLOTS + EQUIPMENT_SLOTS; // 33
 
     private static final int GUI_WIDTH = COMPANION_COLS * (SLOT_SIZE + SLOT_SPACING) - SLOT_SPACING + 20;
-    private static final int GUI_HEIGHT = COMPANION_ROWS * (SLOT_SIZE + SLOT_SPACING) - SLOT_SPACING + 60;
+    private static final int GUI_HEIGHT = COMPANION_ROWS * (SLOT_SIZE + SLOT_SPACING) - SLOT_SPACING + 60 + EQUIPMENT_ROW_HEIGHT;
+    private static final String[] EQUIP_NAMES = {"MainHand", "OffHand", "Feet", "Legs", "Chest", "Head"};
+    private static final String[] EQUIP_CMDS = {"mainhand", "offhand", "feet", "legs", "chest", "head"};
 
     private static CompanionInventoryScreen INSTANCE;
 
@@ -36,8 +41,8 @@ public class CompanionInventoryScreen extends Screen {
     private int guiLeft;
     private int guiTop;
 
-    // 物品数据
-    private NonNullList<ItemStack> companionItems = NonNullList.withSize(COMPANION_SLOTS, ItemStack.EMPTY);
+    // 物品数据（27 存储槽 + 6 设备槽）
+    private NonNullList<ItemStack> companionItems = NonNullList.withSize(TOTAL_SLOTS, ItemStack.EMPTY);
 
     // 玩家手中物品
     private ItemStack heldItem = ItemStack.EMPTY;
@@ -163,6 +168,9 @@ public class CompanionInventoryScreen extends Screen {
         // 重置热点
         hoveredSlot = -1;
 
+        // 绘制设备槽（装备行）
+        drawEquipmentSlots(graphics, mouseX, mouseY);
+
         // 绘制同伴背包格子
         drawCompanionSlots(graphics, mouseX, mouseY);
 
@@ -175,7 +183,7 @@ public class CompanionInventoryScreen extends Screen {
         super.render(graphics, mouseX, mouseY, partialTick);
 
         // 绘制提示
-        if (hoveredSlot >= 0 && hoveredSlot < COMPANION_SLOTS) {
+        if (hoveredSlot >= 0 && hoveredSlot < TOTAL_SLOTS) {
             ItemStack stack = companionItems.get(hoveredSlot);
             if (!stack.isEmpty()) {
                 List<Component> tooltip = new ArrayList<>();
@@ -183,16 +191,71 @@ public class CompanionInventoryScreen extends Screen {
                 if (stack.getCount() > 1) {
                     tooltip.add(Component.literal("x" + stack.getCount()));
                 }
-                tooltip.add(Component.literal("Left: Take all"));
-                tooltip.add(Component.literal("Right: Take 1"));
+                if (hoveredSlot < COMPANION_SLOTS) {
+                    // 普通存储槽
+                    tooltip.add(Component.literal("Left: Take all"));
+                    tooltip.add(Component.literal("Right: Take 1"));
+                } else {
+                    // 设备槽
+                    int eqIdx = hoveredSlot - COMPANION_SLOTS;
+                    if (eqIdx >= 0 && eqIdx < EQUIP_CMDS.length) {
+                        tooltip.add(Component.literal("Equipped: " + EQUIP_NAMES[eqIdx]));
+                        tooltip.add(Component.literal("Click to unequip"));
+                    }
+                }
                 graphics.renderComponentTooltip(this.font, tooltip, mouseX, mouseY);
+            }
+        }
+    }
+
+    private void drawEquipmentSlots(GuiGraphics graphics, int mouseX, int mouseY) {
+        int eqCount = EQUIPMENT_SLOTS;
+        int totalEqWidth = eqCount * (SLOT_SIZE + SLOT_SPACING) - SLOT_SPACING;
+        int startX = guiLeft + (GUI_WIDTH - totalEqWidth) / 2;
+        int startY = guiTop + 35;
+
+        // 标签
+        String label = "Equipment";
+        if (this.font != null) {
+            graphics.drawString(this.font, label,
+                guiLeft + (GUI_WIDTH - this.font.width(label)) / 2,
+                startY - 12, 0x888888, true);
+        }
+
+        for (int i = 0; i < eqCount; i++) {
+            int slotX = startX + i * (SLOT_SIZE + SLOT_SPACING);
+            int slotY = startY;
+
+            // 设备槽背景（紫色边框区分）
+            graphics.fill(slotX, slotY, slotX + SLOT_SIZE, slotY + SLOT_SIZE, 0xFF4a3a6a);
+            graphics.fill(slotX + 1, slotY + 1, slotX + SLOT_SIZE - 1, slotY + SLOT_SIZE - 1, 0xFF2a2a4a);
+
+            // 设备槽物品（虚拟索引 27-32）
+            int slotIndex = COMPANION_SLOTS + i;
+            ItemStack stack = companionItems.get(slotIndex);
+            if (!stack.isEmpty()) {
+                graphics.renderItem(stack, slotX + 1, slotY + 1);
+                graphics.renderItemDecorations(this.font, stack, slotX + 1, slotY + 1);
+            }
+
+            // 悬停高亮
+            if (mouseX >= slotX && mouseX < slotX + SLOT_SIZE && mouseY >= slotY && mouseY < slotY + SLOT_SIZE) {
+                graphics.fill(slotX, slotY, slotX + SLOT_SIZE, slotY + SLOT_SIZE, 0x40AA00FF);
+                hoveredSlot = slotIndex;
+            }
+
+            // 槽位名称标签
+            if (this.font != null) {
+                String name = EQUIP_NAMES[i];
+                int nameX = slotX + (SLOT_SIZE - this.font.width(name)) / 2;
+                graphics.drawString(this.font, name, nameX, slotY + SLOT_SIZE + 1, 0x666666, true);
             }
         }
     }
 
     private void drawCompanionSlots(GuiGraphics graphics, int mouseX, int mouseY) {
         int startX = guiLeft + 10;
-        int startY = guiTop + 35;
+        int startY = guiTop + 35 + EQUIPMENT_ROW_HEIGHT;
 
         for (int i = 0; i < COMPANION_SLOTS; i++) {
             int slotX = startX + (i % COMPANION_COLS) * (SLOT_SIZE + SLOT_SPACING);
@@ -283,6 +346,25 @@ public class CompanionInventoryScreen extends Screen {
                 }
             }
             return true;
+        } else if (slot >= COMPANION_SLOTS && slot < TOTAL_SLOTS) {
+            // 设备槽点击（27-32）
+            int eqIdx = slot - COMPANION_SLOTS;
+            if (eqIdx >= 0 && eqIdx < EQUIP_CMDS.length) {
+                String cmd = EQUIP_CMDS[eqIdx];
+                Minecraft mc = Minecraft.getInstance();
+                if (mc.getConnection() != null) {
+                    if (button == 0) {
+                        // 左键：卸下装备
+                        mc.getConnection().sendCommand("companion unequip " + cmd);
+                        companionItems.set(slot, ItemStack.EMPTY);
+                    } else if (button == 1 && !heldItem.isEmpty()) {
+                        // 右键且有手持物品：尝试装备
+                        mc.getConnection().sendCommand("companion equip " + cmd);
+                        heldItem = ItemStack.EMPTY;
+                    }
+                }
+            }
+            return true;
         } else {
             // 点击空白区域
             if (button == 0 && !heldItem.isEmpty()) {
@@ -325,8 +407,23 @@ public class CompanionInventoryScreen extends Screen {
     }
 
     private int getSlotAtPosition(int mouseX, int mouseY) {
+        // 先检查设备行（位于网格上方）
+        int eqCount = EQUIPMENT_SLOTS;
+        int totalEqWidth = eqCount * (SLOT_SIZE + SLOT_SPACING) - SLOT_SPACING;
+        int eqStartX = guiLeft + (GUI_WIDTH - totalEqWidth) / 2;
+        int eqStartY = guiTop + 35;
+
+        for (int i = 0; i < eqCount; i++) {
+            int slotX = eqStartX + i * (SLOT_SIZE + SLOT_SPACING);
+            int slotY = eqStartY;
+            if (mouseX >= slotX && mouseX < slotX + SLOT_SIZE && mouseY >= slotY && mouseY < slotY + SLOT_SIZE) {
+                return COMPANION_SLOTS + i; // 27-32
+            }
+        }
+
+        // 再检查网格（向下偏移了设备行高度）
         int startX = guiLeft + 10;
-        int startY = guiTop + 35;
+        int startY = guiTop + 35 + EQUIPMENT_ROW_HEIGHT;
 
         for (int i = 0; i < COMPANION_SLOTS; i++) {
             int slotX = startX + (i % COMPANION_COLS) * (SLOT_SIZE + SLOT_SPACING);

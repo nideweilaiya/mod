@@ -130,7 +130,8 @@ public class CompanionChopGoal extends Goal {
                 BlockState state = companion.level().getBlockState(targetBlock);
                 float hardness = state.getBlock().defaultDestroyTime();
 
-                accumulatedProgress += 1f / (hardness * BASE_BREAK_TICKS_PER_HARDNESS);
+                float toolSpeed = companion.getToolDigSpeed(state);
+                accumulatedProgress += toolSpeed / (hardness * BASE_BREAK_TICKS_PER_HARDNESS);
                 isChopping = true;
 
                 // Swing animation every 6 ticks
@@ -260,8 +261,9 @@ public class CompanionChopGoal extends Goal {
         level.levelEvent(2001, pos, net.minecraft.world.level.block.Block.getId(state));
 
         // Get drops before clearing
+        ItemStack heldTool = companion.getEquippedTool();
         List<ItemStack> drops = net.minecraft.world.level.block.Block.getDrops(state,
-            (net.minecraft.server.level.ServerLevel) level, pos, null, companion, ItemStack.EMPTY);
+            (net.minecraft.server.level.ServerLevel) level, pos, null, companion, heldTool);
 
         // Clear the block
         level.setBlock(pos, net.minecraft.world.level.block.Blocks.AIR.defaultBlockState(), 3);

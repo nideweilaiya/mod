@@ -351,6 +351,13 @@ public class AutomatonEntity extends PathfinderMob {
         if (!this.level().isClientSide && !respawnPending) {
             respawnPending = true;
 
+            // Save death data before entity is removed
+            String deathCharId = characterId;
+            int deathLevel = level;
+            int deathXp = xp;
+            int deathSkinType = this.entityData.get(DATA_SKIN_TYPE);
+            String deathSkinValue = this.entityData.get(DATA_SKIN_VALUE);
+
             // Find owner player before removing from manager
             String customName = this.getCustomName() != null ? this.getCustomName().getString() : "Companion";
             ServerPlayer owner = getOwner();
@@ -368,7 +375,7 @@ public class AutomatonEntity extends PathfinderMob {
                     "§c" + customName + " died! Respawning in 30 seconds..."));
             }
 
-            scheduleRespawn();
+            scheduleRespawn(deathCharId, deathLevel, deathXp, deathSkinType, deathSkinValue);
         }
         super.die(source);
     }
@@ -387,13 +394,12 @@ public class AutomatonEntity extends PathfinderMob {
     }
 
     /**
-     * Schedule a respawn task 30 seconds (600 ticks) later.
+     * Schedule a respawn task 30 seconds (600 ticks) later, preserving level/XP/skin.
      */
-    private void scheduleRespawn() {
+    private void scheduleRespawn(String charId, int savedLevel, int savedXp, int savedSkinType, String savedSkinValue) {
         if (this.level().isClientSide || ownerUUID == null) return;
 
         UUID ownerUuid = ownerUUID;
-        String charId = characterId;
         net.minecraft.server.MinecraftServer server = this.level().getServer();
         if (server == null) return;
 
@@ -416,6 +422,22 @@ public class AutomatonEntity extends PathfinderMob {
                 // Create new companion at player's position
                 AutomatonEntity newCompanion = AutomatonEntity.create(targetLevel, charId, player);
                 targetLevel.addFreshEntity(newCompanion);
+
+                // Restore skin
+                if (savedSkinType == 1) {
+                    newCompanion.setSkinFromUrl(savedSkinValue);
+                } else if (savedSkinType == 2) {
+                    newCompanion.setSkinFromPlayer(savedSkinValue);
+                }
+
+                // Restore level & XP
+                if (savedLevel > 1) {
+                    newCompanion.setLevel(savedLevel);
+                }
+                if (savedXp > 0) {
+                    newCompanion.grantXp(savedXp);
+                }
+
                 newCompanion.showDialogue("§a我回来了！", 80);
                 newCompanion.playSpawnParticles();
 
@@ -424,7 +446,7 @@ public class AutomatonEntity extends PathfinderMob {
                     AICompanionMod.companionManager.addCompanion(ownerUuid, newCompanion);
                 }
 
-                player.sendSystemMessage(net.minecraft.network.chat.Component.literal("§a你的同伴已复活！"));
+                player.sendSystemMessage(net.minecraft.network.chat.Component.literal("§a你的同伴已复活！等级: " + savedLevel));
             }
         ));
     }

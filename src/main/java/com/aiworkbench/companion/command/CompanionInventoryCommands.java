@@ -182,21 +182,40 @@ public class CompanionInventoryCommands {
             return 0;
         }
 
-        ItemStack playerItem = player.getInventory().getSelected();
-        if (playerItem.isEmpty()) {
-            source.sendFailure(Component.literal("You are not holding any item"));
-            return 0;
-        }
-
         ItemStack companionSlot = companion.getItem(slot);
         if (!companionSlot.isEmpty()) {
             source.sendFailure(Component.literal("Companion slot is not empty. Use /companion swap " + slot + " first."));
             return 0;
         }
 
-        companion.setItem(slot, playerItem.copy());
-        player.getInventory().setItem(player.getInventory().selected, ItemStack.EMPTY);
-        source.sendSuccess(() -> Component.literal("Put " + playerItem.getDisplayName().getString() + " into companion slot " + slot), true);
+        // Try selected hotbar slot first, then search entire inventory
+        ItemStack playerItem = player.getInventory().getSelected();
+        int sourceSlot = player.getInventory().selected;
+
+        if (playerItem.isEmpty()) {
+            // Search entire inventory (main + hotbar) for any item
+            for (int i = 0; i < player.getInventory().getContainerSize(); i++) {
+                ItemStack s = player.getInventory().getItem(i);
+                if (!s.isEmpty()) {
+                    playerItem = s.copy();
+                    sourceSlot = i;
+                    break;
+                }
+            }
+            if (playerItem.isEmpty()) {
+                source.sendFailure(Component.literal("You are not holding any item"));
+                return 0;
+            }
+            // Take item from the found slot
+            player.getInventory().setItem(sourceSlot, ItemStack.EMPTY);
+        } else {
+            // Take from selected hotbar slot
+            player.getInventory().setItem(player.getInventory().selected, ItemStack.EMPTY);
+        }
+
+        companion.setItem(slot, playerItem);
+        final ItemStack putItem = playerItem;
+        source.sendSuccess(() -> Component.literal("Put " + putItem.getDisplayName().getString() + " into companion slot " + slot), true);
 
         return 1;
     }

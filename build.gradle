@@ -36,6 +36,18 @@ minecraft {
                 }
             }
         }
+        gameTestServer {
+            workingDirectory project.file('run')
+            property 'forge.logging.markers', 'REGISTRIES'
+            property 'forge.logging.console.level', 'debug'
+            property 'forge.enabledGameTestNamespaces', 'aicompanion'
+
+            mods {
+                aicompanion {
+                    source sourceSets.main
+                }
+            }
+        }
     }
 }
 
@@ -45,11 +57,64 @@ sourceSets {
             srcDirs 'src/main/resources'
         }
     }
+    test {
+        java {
+            srcDir 'src/test/java'
+        }
+        resources {
+            srcDir 'src/test/resources'
+        }
+    }
 }
 
 dependencies {
     minecraft 'net.minecraftforge:forge:1.20.4-49.0.30'
     implementation 'com.mojang:authlib:6.0.52'
+
+    // Test dependencies
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.1'
+    testImplementation 'org.mockito:mockito-core:5.8.0'
+    testImplementation 'org.mockito:mockito-junit-jupiter:5.8.0'
+    testRuntimeOnly 'org.junit.platform:junit-platform-console-standalone:1.10.1'
+}
+
+test {
+    useJUnitPlatform()
+
+    // 排除 GameTest（这些需要 Minecraft 运行时，在 gameTestServer 中执行）
+    exclude '**/gametest/**'
+
+    // Windows JDK 注册表冲突修复：强制使用 JDK 17 运行测试进程
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+
+    testLogging {
+        events "passed", "skipped", "failed"
+        showStandardStreams = true
+    }
+}
+
+// ========================================
+// Windows Gradle Test Worker 兼容修复
+// ========================================
+// Gradle 8.1 在 Windows 上 fork Test Worker 时可能因 JDK 注册表冲突
+// 导致 ClassNotFoundException: GradleWorkerMain。
+// 回退方案：使用 javaexec 直接运行 JUnit（不 fork worker 进程）。
+//
+// 在无法修复 Gradle Test Worker 的环境中使用：
+//   ./gradlew.bat runUnitTests
+// ========================================
+tasks.register('runUnitTests', JavaExec) {
+    description = '直接运行 JUnit 单元测试（绕开 Gradle Test Worker fork 问题）'
+    group = 'verification'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'org.junit.platform.console.ConsoleLauncher'
+    args 'execute'
+    args '--scan-classpath'
+    args '--details', 'summary'
+    // Ensure tests are compiled before running
+    dependsOn compileTestJava
 }
 
 jar {

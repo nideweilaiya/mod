@@ -31,23 +31,15 @@ public class CompanionMineGoal extends Goal {
     private static final float BASE_BREAK_TICKS_PER_HARDNESS = 30f;
     private static final double MINE_DISTANCE_SQ = 3.0 * 3.0;  // Must be within 3 blocks
 
-    // Block tags that are mineable (simplified check)
+    // Block tags that are mineable - only ores and valuable stone blocks
     private static final List<String> MINEABLE_BLOCKS = List.of(
-        "stone", "dirt", "grass", "gravel", "sand", "clay", "ice", "snow", "snow_block",
-        "cobblestone", "cobblestone_slab", "cobblestone_stairs",
-        "oak_log", "spruce_log", "birch_log", "jungle_log", "dark_oak_log", "acacia_log",
-        "oak_planks", "spruce_planks", "birch_planks", "jungle_planks", "dark_oak_planks", "acacia_planks",
-        "oak_leaves", "spruce_leaves", "birch_leaves", "jungle_leaves", "dark_oak_leaves", "acacia_leaves",
-        "coal_ore", "iron_ore", "copper_ore", "gold_ore", "redstone_ore", "emerald_ore", "lapis_ore",
-        "diamond_ore", "deepslate_coal_ore", "deepslate_iron_ore", "deepslate_copper_ore",
-        "deepslate_gold_ore", "deepslate_redstone_ore", "deepslate_emerald_ore", "deepslate_lapis_ore",
-        "deepslate_diamond_ore", "nether_gold_ore", "nether_quartz_ore",
-        "oak_slab", "spruce_slab", "birch_slab", "jungle_slab", "dark_oak_slab", "acacia_slab",
-        "stone_slab", "smooth_stone_slab", "cobblestone_slab",
-        "oak_stairs", "spruce_stairs", "birch_stairs", "jungle_stairs", "dark_oak_stairs", "acacia_stairs",
-        "oak_fence", "spruce_fence", "birch_fence", "jungle_fence", "dark_oak_fence", "acacia_fence",
-        "oak_fence_gate", "spruce_fence_gate", "birch_fence_gate", "jungle_fence_gate",
-        "dark_oak_fence_gate", "acacia_fence_gate"
+        "coal_ore", "iron_ore", "copper_ore", "gold_ore", "redstone_ore",
+        "emerald_ore", "lapis_ore", "diamond_ore",
+        "deepslate_coal_ore", "deepslate_iron_ore", "deepslate_copper_ore",
+        "deepslate_gold_ore", "deepslate_redstone_ore", "deepslate_emerald_ore",
+        "deepslate_lapis_ore", "deepslate_diamond_ore",
+        "nether_gold_ore", "nether_quartz_ore",
+        "ancient_debris"
     );
 
     public CompanionMineGoal(AutomatonEntity companion, double speed, float range) {

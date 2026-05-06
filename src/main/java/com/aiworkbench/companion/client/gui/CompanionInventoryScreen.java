@@ -58,7 +58,7 @@ public class CompanionInventoryScreen extends Screen {
     private static final int RIGHT_CLICK_DELAY = 10; // ticks before auto-repeat
 
     public CompanionInventoryScreen() {
-        super(Component.literal("Companion Backpack"));
+        super(Component.translatable("gui.aicompanion.backpack_title"));
         INSTANCE = this;
     }
 
@@ -162,7 +162,7 @@ public class CompanionInventoryScreen extends Screen {
         graphics.fill(guiLeft + 2, guiTop + 2, guiLeft + GUI_WIDTH - 2, guiTop + GUI_HEIGHT - 2, 0xAA2a2a4a);
 
         // 标题
-        String title = "Companion Backpack";
+        String title = Component.translatable("gui.aicompanion.backpack_title").getString();
         graphics.drawString(this.font, title, guiLeft + (GUI_WIDTH - this.font.width(title)) / 2, guiTop + 18, 0xFFFFFF, true);
 
         // 重置热点

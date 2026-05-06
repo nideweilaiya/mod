@@ -6,6 +6,8 @@ import com.aiworkbench.companion.entity.goal.CompanionFollowGoal;
 import com.aiworkbench.companion.entity.goal.CompanionWanderGoal;
 import com.aiworkbench.companion.entity.goal.JumpGoal;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.core.particles.SimpleParticleType;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
@@ -161,20 +163,71 @@ public class AutomatonEntity extends PathfinderMob {
     }
 
     public void playHealSound() {
-        if (!this.level().isClientSide) {
+        if (this.level() instanceof ServerLevel serverLevel) {
             this.playSound(net.minecraft.sounds.SoundEvents.GENERIC_EAT, 1.0f, 1.2f);
+            serverLevel.sendParticles(ParticleTypes.HEART,
+                this.getX(), this.getY() + 1.2, this.getZ(),
+                8, 0.4, 0.3, 0.4, 0.1);
         }
     }
 
     public void playTeleportSound() {
-        if (!this.level().isClientSide) {
+        if (this.level() instanceof ServerLevel serverLevel) {
             this.playSound(net.minecraft.sounds.SoundEvents.ENDERMAN_TELEPORT, 1.0f, 1.0f);
+            serverLevel.sendParticles(ParticleTypes.PORTAL,
+                this.getX(), this.getY() + 0.5, this.getZ(),
+                30, 0.5, 0.5, 0.5, 0.3);
+            serverLevel.sendParticles(ParticleTypes.REVERSE_PORTAL,
+                this.getX(), this.getY() + 0.5, this.getZ(),
+                20, 0.5, 0.5, 0.5, 0.3);
         }
     }
 
     public void playModeSwitchSound() {
-        if (!this.level().isClientSide) {
+        if (this.level() instanceof ServerLevel serverLevel) {
             this.playSound(net.minecraft.sounds.SoundEvents.ITEM_PICKUP, 1.0f, 1.5f);
+            serverLevel.sendParticles(ParticleTypes.HAPPY_VILLAGER,
+                this.getX(), this.getY() + 1.0, this.getZ(),
+                10, 0.5, 0.4, 0.5, 0.2);
+        }
+    }
+
+    /**
+     * Spawn particles at this entity's position (server-side only).
+     */
+    private void spawnParticlesAtSelf(SimpleParticleType type, int count, double spread) {
+        if (this.level() instanceof ServerLevel serverLevel) {
+            serverLevel.sendParticles(type,
+                this.getX(), this.getY() + 0.8, this.getZ(),
+                count, spread, spread, spread, 0.1);
+        }
+    }
+
+    /**
+     * Spawn particles for companion spawn/revival event.
+     */
+    public void playSpawnParticles() {
+        if (this.level() instanceof ServerLevel serverLevel) {
+            serverLevel.sendParticles(ParticleTypes.END_ROD,
+                this.getX(), this.getY() + 0.5, this.getZ(),
+                30, 0.6, 0.6, 0.6, 0.2);
+            serverLevel.sendParticles(ParticleTypes.PORTAL,
+                this.getX(), this.getY() + 0.5, this.getZ(),
+                20, 0.5, 0.5, 0.5, 0.3);
+            serverLevel.sendParticles(ParticleTypes.TOTEM_OF_UNDYING,
+                this.getX(), this.getY() + 0.8, this.getZ(),
+                15, 0.4, 0.4, 0.4, 0.5);
+        }
+    }
+
+    /**
+     * Spawn particles for item pickup event.
+     */
+    public void playPickupParticles() {
+        if (this.level() instanceof ServerLevel serverLevel) {
+            serverLevel.sendParticles(ParticleTypes.WAX_ON,
+                this.getX(), this.getY() + 0.8, this.getZ(),
+                5, 0.3, 0.3, 0.3, 0.05);
         }
     }
 
@@ -345,6 +398,7 @@ public class AutomatonEntity extends PathfinderMob {
                 AutomatonEntity newCompanion = AutomatonEntity.create(targetLevel, charId, player);
                 targetLevel.addFreshEntity(newCompanion);
                 newCompanion.showDialogue("§a我回来了！", 80);
+                newCompanion.playSpawnParticles();
 
                 // Re-register with manager
                 if (AICompanionMod.companionManager != null) {
@@ -511,6 +565,7 @@ public class AutomatonEntity extends PathfinderMob {
 
         if (picked > 0) {
             AICompanionMod.LOGGER.info("[AutomatonEntity] Picked up " + picked + " item stacks");
+            playPickupParticles();
             autoEquip();
         }
     }

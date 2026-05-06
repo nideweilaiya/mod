@@ -81,6 +81,9 @@ public class CompanionCoreItem extends Item {
         // Register with manager
         manager.addCompanion(player.getUUID(), companion);
 
+        // Spawn particles
+        companion.playSpawnParticles();
+
         // Consume item
         stack.shrink(1);
 

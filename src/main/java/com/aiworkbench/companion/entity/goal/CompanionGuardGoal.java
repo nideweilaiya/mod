@@ -7,8 +7,10 @@ import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.server.level.ServerLevel;
 
 import java.util.EnumSet;
+import javax.annotation.Nullable;
 
 /**
  * Companion Guard Goal - defends owner from hostile mobs.
@@ -164,13 +166,15 @@ public class CompanionGuardGoal extends Goal {
     /**
      * Get the owner player
      */
+    @Nullable
     private Player getOwner() {
         if (companion.getOwnerUUID() == null || companion.getServer() == null) {
             return null;
         }
         // Use companion's current dimension instead of always OVERWORLD
-        return companion.getServer().getLevel(companion.level().dimension())
-            .getPlayerByUUID(companion.getOwnerUUID());
+        ServerLevel ownerLevel = companion.getServer().getLevel(companion.level().dimension());
+        if (ownerLevel == null) return null;
+        return ownerLevel.getPlayerByUUID(companion.getOwnerUUID());
     }
 
     /**

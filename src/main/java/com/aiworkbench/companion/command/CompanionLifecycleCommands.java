@@ -158,7 +158,13 @@ public class CompanionLifecycleCommands {
             return 0;
         }
 
-        companion.teleportTo(player.getX(), player.getY(), player.getZ());
+        // Cross-dimension check
+        if (!player.level().dimension().equals(companion.level().dimension())) {
+            companion.teleportTo(player.serverLevel(), player.getX(), player.getY(), player.getZ(),
+                java.util.Set.of(), player.getYRot(), player.getXRot());
+        } else {
+            companion.teleportTo(player.getX(), player.getY(), player.getZ());
+        }
         companion.setDeltaMovement(0, 0, 0);
         companion.fallDistance = 0;
 

@@ -264,16 +264,25 @@ public class BridgeClient implements AutoCloseable {
 
         AICompanionMod.LOGGER.debug("[Bridge] Received: " + msg.type);
 
-        switch (msg.type) {
-            case "move": handleMove(msg); break;
-            case "dialogue": handleDialogue(msg); break;
-            case "animation": handleAnimation(msg); break;
-            case "skin": handleSkin(msg); break;
-            case "remove": handleRemove(msg); break;
-            case "follow": handleFollow(msg); break;
-            case "pong": lastPongTime = System.currentTimeMillis(); break;
-            default: AICompanionMod.LOGGER.warn("[Bridge] Unknown command: " + msg.type);
+        // pong is a simple timestamp update, safe from any thread
+        if (msg.type.equals("pong")) {
+            lastPongTime = System.currentTimeMillis();
+            return;
         }
+
+        // All entity operations MUST run on the Minecraft server thread
+        if (AICompanionMod.server == null) return;
+        AICompanionMod.server.execute(() -> {
+            switch (msg.type) {
+                case "move": handleMove(msg); break;
+                case "dialogue": handleDialogue(msg); break;
+                case "animation": handleAnimation(msg); break;
+                case "skin": handleSkin(msg); break;
+                case "remove": handleRemove(msg); break;
+                case "follow": handleFollow(msg); break;
+                default: AICompanionMod.LOGGER.warn("[Bridge] Unknown command: " + msg.type);
+            }
+        });
     }
 
     private void handleMove(BridgeMessage msg) {
@@ -291,12 +300,11 @@ public class BridgeClient implements AutoCloseable {
 
     private void handleDialogue(BridgeMessage msg) {
         if (msg.companion_id == null || msg.text == null) return;
+        if (AICompanionMod.server == null) return;
+
+        // We're already on the server thread (called from server.execute() in handleMessage)
         AutomatonEntity companion = findCompanionById(msg.companion_id);
         if (companion == null) return;
-
-        // Cancel any pending hide for this companion
-        ScheduledFuture<?> existing = pendingDialogueHides.remove(msg.companion_id);
-        if (existing != null) existing.cancel(false);
 
         String displayText = msg.text
             .replace("&", "§")
@@ -308,18 +316,20 @@ public class BridgeClient implements AutoCloseable {
         companion.setCustomNameVisible(true);
 
         int durationSecs = (msg.duration != null) ? msg.duration.intValue() : 3;
+        int durationTicks = durationSecs * 20;
 
-        // Schedule entity modification on main server thread for thread safety
-        ScheduledFuture<?> future = scheduler.schedule(() -> {
-            if (AICompanionMod.server != null) {
-                AICompanionMod.server.execute(() -> {
-                    companion.setCustomNameVisible(false);
-                    companion.setCustomName(Component.empty());
-                    pendingDialogueHides.remove(msg.companion_id);
-                });
+        // Use TickTask for thread-safe delayed hide on the server thread
+        String companionId = msg.companion_id;
+        AICompanionMod.server.tell(new net.minecraft.server.TickTask(
+            AICompanionMod.server.getTickCount() + durationTicks,
+            () -> {
+                AutomatonEntity comp = findCompanionById(companionId);
+                if (comp != null) {
+                    comp.setCustomNameVisible(false);
+                    comp.setCustomName(Component.empty());
+                }
             }
-        }, durationSecs, TimeUnit.SECONDS);
-        pendingDialogueHides.put(msg.companion_id, future);
+        ));
 
         AICompanionMod.LOGGER.info("[Bridge] Companion " + msg.companion_id + " dialogue displayed: " + displayText);
     }

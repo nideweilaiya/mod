@@ -132,15 +132,21 @@ public class CompanionTCPServer {
         if (msg.type == null) return;
         AICompanionMod.LOGGER.info("TCP Received command: " + msg.type);
 
-        switch (msg.type) {
-            case "move": handleMove(msg); break;
-            case "dialogue": handleDialogue(msg); break;
-            case "animation": handleAnimation(msg); break;
-            case "skin": handleSkin(msg); break;
-            case "remove": handleRemove(msg); break;
-            case "follow": handleFollow(msg); break;
-            default: AICompanionMod.LOGGER.warn("Unknown command type: " + msg.type);
-        }
+        // All entity operations MUST run on the Minecraft server thread
+        net.minecraft.server.MinecraftServer server = AICompanionMod.server;
+        if (server == null) return;
+
+        server.execute(() -> {
+            switch (msg.type) {
+                case "move": handleMove(msg); break;
+                case "dialogue": handleDialogue(msg); break;
+                case "animation": handleAnimation(msg); break;
+                case "skin": handleSkin(msg); break;
+                case "remove": handleRemove(msg); break;
+                case "follow": handleFollow(msg); break;
+                default: AICompanionMod.LOGGER.warn("Unknown command type: " + msg.type);
+            }
+        });
     }
 
     private void handleMove(CommandMessage msg) {
@@ -159,12 +165,12 @@ public class CompanionTCPServer {
 
     private void handleDialogue(CommandMessage msg) {
         if (msg.companion_id == null || msg.text == null) return;
+        net.minecraft.server.MinecraftServer server = AICompanionMod.server;
+        if (server == null) return;
+
+        // Look up companion on the server thread (we're already on it via handleCommand)
         AutomatonEntity companion = findCompanionById(msg.companion_id);
         if (companion == null) return;
-
-        // Cancel any pending hide for this companion
-        ScheduledFuture<?> existing = pendingDialogueHides.remove(msg.companion_id);
-        if (existing != null) existing.cancel(false);
 
         // Escape HTML-like characters for safe display
         String displayText = msg.text
@@ -177,16 +183,22 @@ public class CompanionTCPServer {
         companion.setCustomName(textComponent);
         companion.setCustomNameVisible(true);
 
-        // Determine display duration (default 3 seconds)
+        // Determine display duration (default 3 seconds), convert to ticks
         int durationSecs = (msg.duration != null) ? msg.duration.intValue() : 3;
+        int durationTicks = durationSecs * 20;
 
-        // Schedule hiding the name
-        ScheduledFuture<?> future = scheduler.schedule(() -> {
-            companion.setCustomNameVisible(false);
-            companion.setCustomName(Component.empty());
-            pendingDialogueHides.remove(msg.companion_id);
-        }, durationSecs, TimeUnit.SECONDS);
-        pendingDialogueHides.put(msg.companion_id, future);
+        // Schedule hide on the Minecraft server thread using TickTask
+        String companionId = msg.companion_id;
+        server.tell(new net.minecraft.server.TickTask(
+            server.getTickCount() + durationTicks,
+            () -> {
+                AutomatonEntity comp = findCompanionById(companionId);
+                if (comp != null) {
+                    comp.setCustomNameVisible(false);
+                    comp.setCustomName(Component.empty());
+                }
+            }
+        ));
 
         AICompanionMod.LOGGER.info("Companion " + msg.companion_id + " dialogue displayed: " + displayText);
     }

@@ -3,6 +3,7 @@ package com.aiworkbench.companion.entity.goal;
 import com.aiworkbench.companion.entity.AutomatonEntity;
 import com.aiworkbench.companion.entity.NavigationSafety;
 import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.Vec3;
@@ -30,16 +31,21 @@ public class CompanionWanderGoal extends Goal {
         setFlags(EnumSet.of(Flag.MOVE, Flag.LOOK));
     }
 
+    @Nullable
+    private Player getOwnerInDimension() {
+        UUID ownerUUID = companion.getOwnerUUID();
+        if (ownerUUID == null || companion.getServer() == null) return null;
+        ServerLevel level = companion.getServer().getLevel(companion.level().dimension());
+        if (level == null) return null;
+        return level.getPlayerByUUID(ownerUUID);
+    }
+
     @Override
     public boolean canUse() {
         // Don't wander if we have an owner nearby
-        UUID ownerUUID = companion.getOwnerUUID();
-        if (ownerUUID != null) {
-            Player owner = companion.getServer().getLevel(companion.level().dimension())
-                .getPlayerByUUID(ownerUUID);
-            if (owner != null && companion.distanceTo(owner) < 8.0) {
-                return false;
-            }
+        Player owner = getOwnerInDimension();
+        if (owner != null && companion.distanceTo(owner) < 8.0) {
+            return false;
         }
 
         if (--ticksUntilWander <= 0) {
@@ -54,13 +60,9 @@ public class CompanionWanderGoal extends Goal {
     @Override
     public boolean canContinueToUse() {
         // Stop if owner is nearby or navigation is done
-        UUID ownerUUID = companion.getOwnerUUID();
-        if (ownerUUID != null) {
-            Player owner = companion.getServer().getLevel(companion.level().dimension())
-                .getPlayerByUUID(ownerUUID);
-            if (owner != null && companion.distanceTo(owner) < 6.0) {
-                return false;
-            }
+        Player owner = getOwnerInDimension();
+        if (owner != null && companion.distanceTo(owner) < 6.0) {
+            return false;
         }
         return companion.getNavigation().isInProgress();
     }
@@ -81,13 +83,9 @@ public class CompanionWanderGoal extends Goal {
     public void tick() {
         // Nothing needed - navigation handles movement
         // Just check if we should stop because owner got close
-        UUID ownerUUID = companion.getOwnerUUID();
-        if (ownerUUID != null) {
-            Player owner = companion.getServer().getLevel(companion.level().dimension())
-                .getPlayerByUUID(ownerUUID);
-            if (owner != null && companion.distanceTo(owner) < 6.0) {
-                companion.getNavigation().stop();
-            }
+        Player owner = getOwnerInDimension();
+        if (owner != null && companion.distanceTo(owner) < 6.0) {
+            companion.getNavigation().stop();
         }
     }
 }

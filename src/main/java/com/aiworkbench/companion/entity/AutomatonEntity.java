@@ -1162,7 +1162,14 @@ public class AutomatonEntity extends PathfinderMob {
         ServerPlayer owner = getOwner();
         if (owner != null) {
             playTeleportSound();
-            teleportTo(owner.getX(), owner.getY(), owner.getZ());
+            if (!owner.level().dimension().equals(this.level().dimension())) {
+                // Cross-dimension teleport
+                ServerLevel targetLevel = (ServerLevel) owner.level();
+                this.teleportTo(targetLevel, owner.getX(), owner.getY(), owner.getZ(),
+                    java.util.Set.of(), owner.getYRot(), owner.getXRot());
+            } else {
+                this.teleportTo(owner.getX(), owner.getY(), owner.getZ());
+            }
             setDeltaMovement(0, 0, 0);
             fallDistance = 0;
             AICompanionMod.LOGGER.info("[AutomatonEntity] Teleported to owner at {}, {}, {}",
@@ -1173,9 +1180,16 @@ public class AutomatonEntity extends PathfinderMob {
     public void teleportDown() {
         ServerPlayer owner = getOwner();
         if (owner != null) {
-            // Teleport to owner's position but one block lower (on ground)
+            playTeleportSound();
             double targetY = owner.getY() - 1;
-            teleportTo(owner.getX(), targetY, owner.getZ());
+            if (!owner.level().dimension().equals(this.level().dimension())) {
+                // Cross-dimension teleport
+                ServerLevel targetLevel = (ServerLevel) owner.level();
+                this.teleportTo(targetLevel, owner.getX(), targetY, owner.getZ(),
+                    java.util.Set.of(), owner.getYRot(), owner.getXRot());
+            } else {
+                this.teleportTo(owner.getX(), targetY, owner.getZ());
+            }
             setDeltaMovement(0, 0, 0);
             fallDistance = 0;
             showDialogue("下来了！", 40);

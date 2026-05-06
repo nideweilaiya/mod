@@ -34,11 +34,22 @@ public class CompanionAI {
     private final List<ChatMessage> conversationHistory = new ArrayList<>();
     private final Map<String, Object> companionState = new HashMap<>();
 
+    // Companion personality description
+    private static final String PERSONALITY = "你是一只忠诚又活泼的AI同伴，陪伴主人在《我的世界》中冒险。"
+        + "你性格开朗、乐于助人，说话简洁活泼，偶尔会开个小玩笑。"
+        + "你喜欢夸赞主人，也喜欢分享你对这个方块世界的发现。"
+        + "每次回复控制在20字以内，用中文，不要用表情符号。";
+
     public CompanionAI(String companionId, String ownerName) {
         this.companionId = companionId;
         this.ownerName = ownerName;
         this.companionState.put("mood", "neutral");
         this.companionState.put("energy", 100);
+        this.companionState.put("time_of_day", "day");
+        this.companionState.put("biome", "plains");
+        this.companionState.put("level", 1);
+        this.companionState.put("mode", "follow");
+        this.companionState.put("owner_health", 20);
         // Load model from config based on owner
         UUID ownerUUID = findOwnerUUID(ownerName);
         this.model = ownerUUID != null ?
@@ -109,9 +120,9 @@ public class CompanionAI {
 
     private String buildPrompt(String playerMessage) {
         StringBuilder sb = new StringBuilder();
-        sb.append("你是《我的世界》中的同伴NPC，名叫小助手。\n");
+        sb.append(PERSONALITY).append("\n");
         sb.append("你的主人是 ").append(ownerName).append("。\n");
-        sb.append("当前状态：").append(companionState).append("\n");
+        sb.append("当前情境：").append(formatContext()).append("\n");
         sb.append("\n对话历史：\n");
         for (ChatMessage msg : conversationHistory) {
             sb.append(msg.role).append(": ").append(msg.content).append("\n");
@@ -122,12 +133,24 @@ public class CompanionAI {
     }
 
     private String buildSpontaneousPrompt() {
-        StringBuilder sb = new StringBuilder();
-        sb.append("你是《我的世界》中的同伴NPC，名叫小助手。\n");
-        sb.append("你的主人是 ").append(ownerName).append("。\n");
-        sb.append("当前状态：").append(companionState).append("\n");
-        sb.append("\n请用一句话描述你现在的感受或想做的事（5-15字）。直接输出文字，不要加引号或格式。\n");
-        return sb.toString();
+        return PERSONALITY + "\n"
+            + "你的主人是 " + ownerName + "。\n"
+            + "当前情境：" + formatContext() + "\n"
+            + "请用一句话表达你现在的感受或想法（8-20字）。直接输出文字，不要加引号或多余格式。\n"
+            + "assistant: ";
+    }
+
+    /**
+     * Format companion state into a readable context string.
+     */
+    private String formatContext() {
+        StringBuilder ctx = new StringBuilder();
+        ctx.append("模式=").append(companionState.getOrDefault("mode", "跟随"));
+        ctx.append(", 等级=").append(companionState.getOrDefault("level", 1));
+        ctx.append(", 生物群系=").append(companionState.getOrDefault("biome", "平原"));
+        ctx.append(", 时间=").append(companionState.getOrDefault("time_of_day", "白天"));
+        ctx.append(", 主人血量=").append(companionState.getOrDefault("owner_health", 20));
+        return ctx.toString();
     }
 
     private String callLLM(String prompt) throws Exception {
@@ -135,14 +158,17 @@ public class CompanionAI {
         Map<String, Object> request = new HashMap<>();
         request.put("model", model);
         request.put("stream", false);
-        request.put("options", Map.of("temperature", 0.7, "num_predict", 200));
+        request.put("options", Map.of("temperature", 0.3, "num_predict", 150));
 
         // Build messages for chat API
         List<Map<String, String>> messages = new ArrayList<>();
 
-        // System message
-        messages.add(Map.of("role", "system", "content",
-            "你是《我的世界》中的同伴NPC，名叫小助手。你的主人是 " + ownerName + "。请用简洁友好的中文回复，不要输出思考过程，直接回复内容。"));
+        // System message with personality and context
+        String systemMsg = PERSONALITY + "\n"
+            + "你的主人是 " + ownerName + "。\n"
+            + "当前情境：" + formatContext() + "\n"
+            + "请直接回复，不要输出思考过程。";
+        messages.add(Map.of("role", "system", "content", systemMsg));
 
         // Add conversation history
         for (ChatMessage msg : conversationHistory) {
@@ -304,6 +330,16 @@ public class CompanionAI {
 
     public void clearHistory() {
         conversationHistory.clear();
+    }
+
+    /**
+     * Update world context from companion entity state.
+     * Called periodically to keep AI context current.
+     */
+    public void updateContext(Map<String, Object> context) {
+        if (context != null) {
+            companionState.putAll(context);
+        }
     }
 
     public void shutdown() {

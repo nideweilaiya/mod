@@ -27,6 +27,7 @@ public class CompanionCommands {
         // Non-OP commands (basic companion interaction for survival players)
         CompanionLifecycleCommands.registerNonOp(base);
         CompanionBehaviorCommands.register(base);
+        CompanionAICommands.registerNonOp(base);
 
         // OP-only commands (require permission level 2)
         CompanionLifecycleCommands.registerAdmin(base);

@@ -16,11 +16,22 @@ import net.minecraftforge.fml.loading.FMLLoader;
  */
 public class CompanionAICommands {
 
-    public static void register(LiteralArgumentBuilder<CommandSourceStack> parent) {
-        parent.then(Commands.literal("chat").requires(source -> source.hasPermission(2))
+    /**
+     * Register non-OP AI commands: chat, chat clear
+     */
+    public static void registerNonOp(LiteralArgumentBuilder<CommandSourceStack> parent) {
+        parent.then(Commands.literal("chat")
                         .then(Commands.argument("message", StringArgumentType.greedyString())
-                                .executes(ctx -> chatWithAI(ctx.getSource(), StringArgumentType.getString(ctx, "message")))))
-                .then(Commands.literal("model")
+                                .executes(ctx -> chatWithAI(ctx.getSource(), StringArgumentType.getString(ctx, "message"))))
+                        .then(Commands.literal("clear")
+                                .executes(ctx -> clearChat(ctx.getSource()))));
+    }
+
+    /**
+     * Register OP-only AI commands: model, gui
+     */
+    public static void register(LiteralArgumentBuilder<CommandSourceStack> parent) {
+        parent.then(Commands.literal("model")
                         .then(Commands.argument("name", StringArgumentType.greedyString())
                                 .executes(ctx -> setModel(ctx.getSource(), StringArgumentType.getString(ctx, "name"))))
                         .executes(ctx -> showModel(ctx.getSource())))
@@ -106,6 +117,26 @@ public class CompanionAICommands {
         }
 
         openSettingsScreen();
+        return 1;
+    }
+
+    private static int clearChat(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) {
+            source.sendFailure(Component.literal("Must be used by a player"));
+            return 0;
+        }
+
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            return 0;
+        }
+
+        var ai = AICompanionMod.aiManager.getAI(companion);
+        ai.clearHistory();
+        source.sendSuccess(() -> Component.literal("§a[对话] 对话历史已清除"), false);
+        AICompanionMod.LOGGER.info("Chat history cleared for player {}", player.getName().getString());
         return 1;
     }
 

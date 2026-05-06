@@ -142,6 +142,11 @@ public class AutomatonEntity extends PathfinderMob {
     private int lastHurtTime = -200; // Tick when last damaged (negative = full health at start)
     private boolean respawnPending = false; // Prevent double-respawn scheduling
 
+    // ==================== AI Spontaneous Dialogue ====================
+    private int aiSpontaneousCooldown = 0; // ticks until next AI idle speech
+    private static final int AI_SPONTANEOUS_MIN = 2400; // 2 minutes minimum
+    private static final int AI_SPONTANEOUS_MAX = 4800; // 4 minutes maximum
+
     // ==================== Auto-Recall Fields ====================
     private static final double RECALL_DISTANCE_SQ = 1024.0; // 32^2 blocks
     private static final int RECALL_WARNING_TICKS = 100; // 5 seconds (5 * 20)
@@ -518,6 +523,16 @@ public class AutomatonEntity extends PathfinderMob {
             evaluateSituation();
         }
 
+        // AI spontaneous dialogue every 2-4 minutes (server-side only)
+        if (!this.level().isClientSide && tickCount % 20 == 0) {
+            tickAiSpontaneous();
+        }
+
+        // Update AI context every 5 seconds (server-side only)
+        if (!this.level().isClientSide && tickCount % 100 == 0) {
+            pushAiContext();
+        }
+
         // Dialogue auto-hide
         if (!dialogueText.isEmpty() && tickCount > dialogueEndTick) {
             this.setCustomNameVisible(false);
@@ -672,6 +687,87 @@ public class AutomatonEntity extends PathfinderMob {
             if (slot.isEmpty()) return true;
         }
         return false;
+    }
+
+    // ==================== AI Spontaneous Dialogue ====================
+
+    /**
+     * Tick the AI spontaneous dialogue cooldown and trigger when ready.
+     * Only runs every second (called every 20 ticks).
+     */
+    private void tickAiSpontaneous() {
+        if (this.level().isClientSide) return;
+        if (AICompanionMod.aiManager == null) return;
+
+        // Don't speak if already showing dialogue
+        if (!dialogueText.isEmpty() && tickCount < dialogueEndTick) return;
+
+        // Don't speak if in combat (auto-defend or guard active)
+        if (autoDefendTarget != null || guardModeEnabled) return;
+
+        // Don't speak if owner is too far (distance > 20 blocks)
+        ServerPlayer owner = getOwner();
+        if (owner == null || this.distanceToSqr(owner) > 400.0) return;
+
+        // Cooldown management
+        if (aiSpontaneousCooldown > 0) {
+            aiSpontaneousCooldown--;
+            return;
+        }
+
+        // Trigger AI spontaneous dialogue
+        var ai = AICompanionMod.aiManager.getAI(this);
+        ai.generateSpontaneousAction().thenAccept(response -> {
+            if (response != null && !response.isEmpty() && !response.equals("...")) {
+                // Must run on server thread
+                net.minecraft.server.MinecraftServer srv = this.level().getServer();
+                if (srv != null) {
+                    srv.execute(() -> {
+                        if (this.isAlive()) {
+                            showDialogue("§d" + response, 80);
+                        }
+                    });
+                }
+            }
+        });
+
+        // Reset cooldown (2-4 minutes)
+        aiSpontaneousCooldown = AI_SPONTANEOUS_MIN + this.random.nextInt(AI_SPONTANEOUS_MAX - AI_SPONTANEOUS_MIN);
+    }
+
+    /**
+     * Push current world context to the companion's AI brain.
+     * Runs every 5 seconds.
+     */
+    private void pushAiContext() {
+        if (AICompanionMod.aiManager == null) return;
+
+        try {
+            var ai = AICompanionMod.aiManager.getAI(this);
+
+            java.util.Map<String, Object> context = new java.util.HashMap<>();
+            context.put("level", this.entityData.get(DATA_LEVEL));
+            context.put("mode", this.entityData.get(DATA_WORKING_MODE));
+            context.put("owner_health", getOwner() != null ? (int) getOwner().getHealth() : 20);
+
+            // Time of day
+            if (this.level().isDay()) {
+                context.put("time_of_day", "白天");
+            } else {
+                context.put("time_of_day", "夜晚");
+            }
+
+            // Biome
+            var biome = this.level().getBiome(this.blockPosition());
+            String biomeName = biome.unwrapKey()
+                .map(key -> key.location().getPath())
+                .orElse("未知");
+            context.put("biome", biomeName);
+
+            ai.updateContext(context);
+        } catch (Exception e) {
+            // Silently fail - context update is non-critical
+        }
     }
 
     /**

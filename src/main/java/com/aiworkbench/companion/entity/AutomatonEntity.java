@@ -61,6 +61,12 @@ public class AutomatonEntity extends PathfinderMob {
     private static final EntityDataAccessor<Optional<UUID>> DATA_OWNER_UUID =
         SynchedEntityData.defineId(AutomatonEntity.class, EntityDataSerializers.OPTIONAL_UUID);
 
+    // Level & XP data accessors (auto-synced to clients)
+    private static final EntityDataAccessor<Integer> DATA_LEVEL =
+        SynchedEntityData.defineId(AutomatonEntity.class, EntityDataSerializers.INT);
+    private static final EntityDataAccessor<Integer> DATA_XP =
+        SynchedEntityData.defineId(AutomatonEntity.class, EntityDataSerializers.INT);
+
     // ==================== Fields ====================
 
     private UUID ownerUUID;
@@ -141,6 +147,12 @@ public class AutomatonEntity extends PathfinderMob {
     private static final int RECALL_WARNING_TICKS = 100; // 5 seconds (5 * 20)
     private int recallWarningTicks = 0;
     private boolean recallWarningActive = false;
+
+    // ==================== Level & XP Fields ====================
+    private int level = 1;
+    private int xp = 0;
+    private int xpToNext = 130; // XP needed for level 2 (50 + 1*80)
+    private static final int MAX_LEVEL = 100;
 
     // ==================== Constructor ====================
 
@@ -243,6 +255,8 @@ public class AutomatonEntity extends PathfinderMob {
         this.entityData.define(DATA_SKIN_VALUE, "");
         this.entityData.define(DATA_WORKING_MODE, "follow");
         this.entityData.define(DATA_OWNER_UUID, Optional.empty());
+        this.entityData.define(DATA_LEVEL, 1);
+        this.entityData.define(DATA_XP, 0);
     }
 
     // ==================== Attribute Supplier ====================
@@ -898,6 +912,26 @@ public class AutomatonEntity extends PathfinderMob {
                 }
             }
         }
+        // Load level & XP
+        if (tag.contains("CompanionLevel")) {
+            this.level = Math.min(tag.getInt("CompanionLevel"), MAX_LEVEL);
+            this.xp = tag.contains("CompanionXP") ? tag.getInt("CompanionXP") : 0;
+            this.xpToNext = 50 + level * 80;
+
+            // Apply stat bonuses
+            double baseHealth = 120.0;
+            double newMaxHealth = baseHealth + (level - 1) * 2.0;
+            this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(newMaxHealth);
+            if (level % 5 == 0) {
+                double baseAttack = 4.0;
+                double newAttack = baseAttack + (level / 5) * 1.0;
+                this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(newAttack);
+            }
+
+            this.entityData.set(DATA_LEVEL, level);
+            this.entityData.set(DATA_XP, xp);
+        }
+
         // Load working mode
         if (tag.contains("WorkingMode")) {
             String mode = tag.getString("WorkingMode");
@@ -948,6 +982,10 @@ public class AutomatonEntity extends PathfinderMob {
             }
         }
         tag.put("Inventory", inventoryTag);
+
+        // Save level & XP
+        tag.putInt("CompanionLevel", level);
+        tag.putInt("CompanionXP", xp);
     }
 
     // ==================== Getters and Setters ====================
@@ -1510,6 +1548,113 @@ public class AutomatonEntity extends PathfinderMob {
         if (chopModeEnabled) return "chop";
         if (followModeActive) return "follow";
         return "follow";
+    }
+
+    // ==================== Level & XP System ====================
+
+    public int getLevel() { return this.entityData.get(DATA_LEVEL); }
+    public int getXp() { return this.entityData.get(DATA_XP); }
+    public int getXpToNext() { return xpToNext; }
+
+    /**
+     * Grant XP to the companion. Triggers level-up when enough XP is accumulated.
+     */
+    public void grantXp(int amount) {
+        if (this.level().isClientSide) return;
+        if (level >= MAX_LEVEL) return;
+
+        xp += amount;
+        AICompanionMod.LOGGER.info("[Level] Companion {} gained {} XP (total: {}/{})",
+            this.getUUID().toString().substring(0, 8), amount, xp, xpToNext);
+
+        // Check for level-up
+        while (xp >= xpToNext && level < MAX_LEVEL) {
+            xp -= xpToNext;
+            level++;
+            xpToNext = 50 + level * 80; // Level N→N+1: 50 + N*80
+            onLevelUp();
+        }
+
+        // Sync to client
+        this.entityData.set(DATA_LEVEL, level);
+        this.entityData.set(DATA_XP, xp);
+    }
+
+    /**
+     * Trigger level-up effects and stat increases.
+     */
+    private void onLevelUp() {
+        // Increase max health by 2 HP (1 heart) per level
+        double baseHealth = 120.0;
+        double newMaxHealth = baseHealth + (level - 1) * 2.0;
+        this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(newMaxHealth);
+        // Heal to full
+        this.setHealth((float) newMaxHealth);
+
+        // Increase attack damage every 5 levels
+        if (level % 5 == 0) {
+            double baseAttack = 4.0;
+            double newAttack = baseAttack + (level / 5) * 1.0;
+            this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(newAttack);
+        }
+
+        // Play sound and particles
+        playLevelUpEffect();
+
+        // Notify owner
+        String msg = "§6§l✦ 升级！同伴达到 Lv." + level + "！";
+        showDialogue(msg, 100);
+
+        ServerPlayer owner = getOwner();
+        if (owner != null) {
+            owner.sendSystemMessage(net.minecraft.network.chat.Component.literal(
+                "§6§l✦ " + this.getCustomName().getString() + " 升级到 Lv." + level + "！"));
+        }
+
+        AICompanionMod.LOGGER.info("[Level] Companion leveled up to {}! HP: {}/{}",
+            level, (int)this.getHealth(), (int)this.getMaxHealth());
+    }
+
+    /**
+     * Play level-up particle and sound effects.
+     */
+    private void playLevelUpEffect() {
+        if (this.level() instanceof ServerLevel serverLevel) {
+            serverLevel.sendParticles(ParticleTypes.TOTEM_OF_UNDYING,
+                this.getX(), this.getY() + 1.0, this.getZ(),
+                30, 0.5, 0.5, 0.5, 0.5);
+            serverLevel.sendParticles(ParticleTypes.HAPPY_VILLAGER,
+                this.getX(), this.getY() + 1.0, this.getZ(),
+                20, 0.5, 0.5, 0.5, 0.3);
+            serverLevel.sendParticles(ParticleTypes.FIREWORK,
+                this.getX(), this.getY() + 1.5, this.getZ(),
+                15, 0.6, 0.4, 0.6, 0.1);
+        }
+        this.playSound(net.minecraft.sounds.SoundEvents.PLAYER_LEVELUP, 1.0f, 1.0f);
+    }
+
+    /**
+     * Set companion level directly (admin command). Also adjusts stats.
+     */
+    public void setLevel(int newLevel) {
+        if (this.level().isClientSide) return;
+        this.level = Math.min(Math.max(newLevel, 1), MAX_LEVEL);
+        this.xp = 0;
+        this.xpToNext = 50 + level * 80;
+
+        // Apply stat bonuses
+        double baseHealth = 120.0;
+        double newMaxHealth = baseHealth + (level - 1) * 2.0;
+        this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(newMaxHealth);
+        if (level % 5 == 0) {
+            double baseAttack = 4.0;
+            double newAttack = baseAttack + (level / 5) * 1.0;
+            this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(newAttack);
+        }
+
+        this.entityData.set(DATA_LEVEL, level);
+        this.entityData.set(DATA_XP, 0);
+        AICompanionMod.LOGGER.info("[Level] Companion level set to {} (admin)", level);
     }
 
     // ==================== Auto-Recall System ====================

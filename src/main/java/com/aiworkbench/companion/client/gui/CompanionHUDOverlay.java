@@ -20,13 +20,14 @@ public class CompanionHUDOverlay {
     private static boolean hudEnabled = true;
 
     // Layout constants
-    private static final int PANEL_WIDTH = 140;
+    private static final int PANEL_WIDTH = 150;
     private static final int PANEL_PADDING = 6;
     private static final int LINE_HEIGHT = 12;
     private static final int TOP_MARGIN = 10;
     private static final int RIGHT_MARGIN = 10;
     private static final int BAR_WIDTH = 80;
     private static final int BAR_HEIGHT = 6;
+    private static final int XP_BAR_HEIGHT = 4;
 
     public static void toggleHUD() {
         hudEnabled = !hudEnabled;
@@ -49,8 +50,8 @@ public class CompanionHUDOverlay {
 
         Player player = mc.player;
 
-        // Calculate panel dimensions
-        int panelHeight = 4 * LINE_HEIGHT + PANEL_PADDING * 2; // name, health, mode, distance
+        // Calculate panel dimensions: name+level, health, xp bar, mode, distance
+        int panelHeight = 5 * LINE_HEIGHT + PANEL_PADDING * 2 + XP_BAR_HEIGHT;
 
         // Panel starts from right side
         int panelX = screenWidth - RIGHT_MARGIN - PANEL_WIDTH;
@@ -62,11 +63,15 @@ public class CompanionHUDOverlay {
         int textX = panelX + PANEL_PADDING;
         int textY = panelY + PANEL_PADDING;
 
-        // Line 1: Companion name
+        // Line 1: Companion name + Level
         Component name = companion.getCustomName() != null
             ? companion.getCustomName()
             : Component.literal("Companion");
+        int level = companion.getLevel();
+        String levelStr = " Lv." + level;
         graphics.drawString(mc.font, name, textX, textY, 0xFFFFFF, true);
+        graphics.drawString(mc.font, levelStr, textX + mc.font.width(name), textY,
+            0xFFAA00, true); // Gold color for level
 
         // Line 2: Health bar
         textY += LINE_HEIGHT;
@@ -97,8 +102,22 @@ public class CompanionHUDOverlay {
             graphics.fill(barX, barY, barX + fillWidth, barY + BAR_HEIGHT, barColor);
         }
 
+        // XP bar (thin, below health bar)
+        int xpBarY = textY + BAR_HEIGHT + 1;
+        int xp = companion.getXp();
+        int xpToNext = companion.getXpToNext();
+        String xpText = "XP: " + xp + "/" + xpToNext;
+        graphics.drawString(mc.font, xpText, textX, xpBarY - 1, 0xAAAAAA, true);
+        int xpBarX = textX + mc.font.width(xpText) + 4;
+        int xpBarY2 = xpBarY;
+        graphics.fill(xpBarX, xpBarY2, xpBarX + BAR_WIDTH, xpBarY2 + XP_BAR_HEIGHT, 0xFF555555);
+        int xpFillWidth = xpToNext > 0 ? (int) (BAR_WIDTH * Math.min((float) xp / xpToNext, 1.0f)) : 0;
+        if (xpFillWidth > 0) {
+            graphics.fill(xpBarX, xpBarY2, xpBarX + xpFillWidth, xpBarY2 + XP_BAR_HEIGHT, 0xFFAA00AA); // Purple
+        }
+
         // Line 3: Working mode
-        textY += LINE_HEIGHT;
+        textY += LINE_HEIGHT + XP_BAR_HEIGHT;
         String mode = companion.getWorkingMode();
         String modeDisplay = switch (mode) {
             case "guard" -> "§cGuard";

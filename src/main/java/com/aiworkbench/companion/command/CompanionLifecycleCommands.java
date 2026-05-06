@@ -2,6 +2,7 @@ package com.aiworkbench.companion.command;
 
 import com.aiworkbench.companion.AICompanionMod;
 import com.aiworkbench.companion.entity.AutomatonEntity;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import net.minecraft.commands.CommandSourceStack;
@@ -31,6 +32,8 @@ public class CompanionLifecycleCommands {
                         .executes(ctx -> comeToPlayer(ctx.getSource())))
                 .then(Commands.literal("down")
                         .executes(ctx -> goDown(ctx.getSource())))
+                .then(Commands.literal("level")
+                        .executes(ctx -> showLevel(ctx.getSource())))
                 .then(Commands.literal("name")
                         .then(Commands.argument("name", StringArgumentType.greedyString())
                                 .executes(ctx -> setName(ctx.getSource(), StringArgumentType.getString(ctx, "name")))));
@@ -43,6 +46,12 @@ public class CompanionLifecycleCommands {
         parent.then(Commands.literal("revive")
                 .requires(source -> source.hasPermission(2))
                 .executes(ctx -> reviveCompanion(ctx.getSource())));
+        parent.then(Commands.literal("level")
+                .requires(source -> source.hasPermission(2))
+                .then(Commands.literal("set")
+                        .then(Commands.argument("level", IntegerArgumentType.integer(1, 100))
+                                .executes(ctx -> setLevel(ctx.getSource(),
+                                        IntegerArgumentType.getInteger(ctx, "level"))))));
     }
 
     private static int showStatus(CommandSourceStack source) {
@@ -229,6 +238,52 @@ public class CompanionLifecycleCommands {
         companion.setCustomNameVisible(true);
         source.sendSuccess(() -> Component.literal("§a[改名] Companion renamed to: " + coloredName), true);
         AICompanionMod.LOGGER.info("Companion renamed to: {} for player {}", name, player.getName().getString());
+        return 1;
+    }
+
+    private static int showLevel(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) {
+            source.sendFailure(Component.literal("Must be used by a player"));
+            return 0;
+        }
+
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            return 0;
+        }
+
+        int level = companion.getLevel();
+        int xp = companion.getXp();
+        int xpToNext = companion.getXpToNext();
+        float progress = xpToNext > 0 ? (float) xp / xpToNext * 100 : 0;
+
+        source.sendSuccess(() -> Component.literal("§6=== 同伴等级 ==="), false);
+        source.sendSuccess(() -> Component.literal("§e等级: §f" + level + " §7(MAX " + 100 + ")"), false);
+        source.sendSuccess(() -> Component.literal("§e经验: §f" + xp + " / " + xpToNext + " §7(" + String.format("%.1f", progress) + "%)"), false);
+        source.sendSuccess(() -> Component.literal("§e生命: §f" + (int)companion.getMaxHealth() + " §7(基础 120 + 等级加成 " + ((level-1)*2) + ")"), false);
+        source.sendSuccess(() -> Component.literal("§e攻击: §f" + String.format("%.1f", companion.getAttribute(net.minecraft.world.entity.ai.attributes.Attributes.ATTACK_DAMAGE).getValue())), false);
+        source.sendSuccess(() -> Component.literal("§6================="), false);
+        return 1;
+    }
+
+    private static int setLevel(CommandSourceStack source, int newLevel) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) {
+            source.sendFailure(Component.literal("Must be used by a player"));
+            return 0;
+        }
+
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            return 0;
+        }
+
+        companion.setLevel(newLevel);
+        source.sendSuccess(() -> Component.literal("§a[等级] 同伴等级已设置为 " + newLevel), true);
+        AICompanionMod.LOGGER.info("Companion level set to {} for player {} (admin)", newLevel, player.getName().getString());
         return 1;
     }
 

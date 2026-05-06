@@ -8,6 +8,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraftforge.event.entity.EntityJoinLevelEvent;
+import net.minecraftforge.event.entity.living.LivingDeathEvent;
 import net.minecraftforge.event.entity.living.LivingHurtEvent;
 import net.minecraftforge.event.entity.player.PlayerEvent;
 import net.minecraftforge.event.entity.player.PlayerInteractEvent;
@@ -179,6 +180,24 @@ public class PlayerEventHandler {
         // Make companion defend for 5 seconds (100 ticks)
         companion.setAutoDefendTarget(attacker, 100);
         companion.showDialogue("§c保护主人！", 40);
+    }
+
+    /**
+     * 同伴击杀生物时获得经验值
+     */
+    @SubscribeEvent
+    public void onLivingDeath(LivingDeathEvent event) {
+        if (event.getEntity().level().isClientSide) return;
+
+        // 检查击杀者是否是同伴
+        net.minecraft.world.entity.Entity killer = event.getSource().getEntity();
+        if (!(killer instanceof AutomatonEntity companion)) return;
+        if (!companion.isAlive()) return;
+
+        int xp = getXpValue(event.getEntity());
+        if (xp > 0) {
+            companion.grantXp(xp);
+        }
     }
 
     /**
@@ -366,5 +385,51 @@ public class PlayerEventHandler {
             }
         }
         return null;
+    }
+
+    /**
+     * 根据生物类型计算经验值 — 使用注册名避免 mapping 差异
+     */
+    private int getXpValue(LivingEntity entity) {
+        net.minecraft.resources.ResourceLocation id =
+            net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType());
+        if (id == null) return 0;
+        String path = id.getPath();
+
+        // Boss
+        if ("ender_dragon".equals(path)) return 500;
+        if ("wither".equals(path)) return 300;
+
+        // Mini-boss / tough mobs
+        if ("elder_guardian".equals(path)) return 100;
+        if ("ravager".equals(path)) return 60;
+        if ("evoker".equals(path)) return 50;
+        if ("vindicator".equals(path)) return 30;
+        if ("piglin_brute".equals(path)) return 25;
+        if ("witch".equals(path)) return 20;
+
+        // Standard hostile mobs
+        if ("creeper".equals(path)) return 15;
+        if ("zombie".equals(path)) return 10;
+        if ("skeleton".equals(path)) return 10;
+        if ("spider".equals(path)) return 10;
+        if ("enderman".equals(path)) return 25;
+        if ("blaze".equals(path)) return 20;
+        if ("ghast".equals(path)) return 30;
+        if ("magma_cube".equals(path)) return 10;
+        if ("slime".equals(path)) return 5;
+        if ("husk".equals(path)) return 12;
+        if ("stray".equals(path)) return 12;
+        if ("drowned".equals(path)) return 12;
+        if ("phantom".equals(path)) return 20;
+        if ("hoglin".equals(path)) return 20;
+        if ("zoglin".equals(path)) return 15;
+        if ("piglin".equals(path)) return 10;
+
+        // Other Monster interface implementations get default
+        if (entity instanceof net.minecraft.world.entity.monster.Monster) return 8;
+
+        // Passive mobs grant no XP
+        return 0;
     }
 }

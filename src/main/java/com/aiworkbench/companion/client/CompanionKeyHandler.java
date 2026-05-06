@@ -30,8 +30,9 @@ public class CompanionKeyHandler {
     public static final String KEY_FOLLOW_TOGGLE = "key.aicompanion.follow_toggle";
     public static final String KEY_FOLLOW_CANCEL = "key.aicompanion.follow_cancel";
     public static final String KEY_TOGGLE_HUD = "key.aicompanion.toggle_hud";
+    public static final String KEY_CONTROL_MENU = "key.aicompanion.control_menu";
 
-    // Keys: C=list, G=settings, B=backpack, K=teleport, F=toggle follow, ESC=cancel task
+    // Keys: C=list, G=settings, B=backpack, K=teleport, V=follow toggle, ESC=cancel task, H=HUD, N=menu
     public static final KeyMapping OPEN_LIST_KEY = new KeyMapping(
         KEY_OPEN_GUI,
         GLFW.GLFW_KEY_C,
@@ -70,6 +71,13 @@ public class CompanionKeyHandler {
         CATEGORY
     );
 
+    // N键 - 打开同伴快捷控制菜单
+    public static final KeyMapping CONTROL_MENU_KEY = new KeyMapping(
+        KEY_CONTROL_MENU,
+        GLFW.GLFW_KEY_N,
+        CATEGORY
+    );
+
     // H键 - 切换HUD显示/隐藏
     public static final KeyMapping TOGGLE_HUD_KEY = new KeyMapping(
         KEY_TOGGLE_HUD,
@@ -92,6 +100,7 @@ public class CompanionKeyHandler {
             event.register(FOLLOW_TOGGLE_KEY);
             event.register(FOLLOW_CANCEL_KEY);
             event.register(TOGGLE_HUD_KEY);
+            event.register(CONTROL_MENU_KEY);
         }
     }
 
@@ -162,6 +171,12 @@ public class CompanionKeyHandler {
                     ),
                     true
                 );
+            }
+
+            // N 键 - 打开同伴快捷控制菜单
+            if (CONTROL_MENU_KEY.consumeClick()) {
+                mc.player.connection.sendCommand("companion menu");
+                AICompanionMod.LOGGER.info("[KeyHandler] N key pressed: opening control menu");
             }
         }
     }

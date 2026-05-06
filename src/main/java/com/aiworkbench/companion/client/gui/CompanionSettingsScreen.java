@@ -1,6 +1,8 @@
 package com.aiworkbench.companion.client.gui;
 
 import com.aiworkbench.companion.CompanionConfig;
+import com.aiworkbench.companion.client.CompanionClientState;
+import com.aiworkbench.companion.entity.AutomatonEntity;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
@@ -8,25 +10,24 @@ import net.minecraft.client.gui.screens.ChatScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
-import java.awt.Desktop;
-import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Companion Settings GUI - Scrollable with mouse wheel support
+ * Companion Settings GUI - shows companion stats and action buttons.
+ * Opened via G key or /companion gui command.
  */
 public class CompanionSettingsScreen extends Screen {
     private final Screen parent;
     private List<String> availableSkins = new ArrayList<>();
     private int selectedSkinIndex = 0;
     private String currentModel = "llama3.2:latest";
-    private String statusMessage = "选择选项后点击应用按钮";
+    private String statusMessage = "";
 
-    // Scroll offset for mouse wheel scrolling
+    // Scroll
     private double scrollOffset = 0;
-    private int totalContentHeight = 340; // Will be calculated based on content
-    private int viewHeight; // Calculated dynamically based on screen size
+    private static final int CONTENT_HEIGHT = 440;
+    private int viewHeight;
 
     private static final String[] AI_MODELS = {
         "llama3.2:latest",
@@ -34,202 +35,171 @@ public class CompanionSettingsScreen extends Screen {
         "qwen3.5:4b"
     };
 
+    // Companion stats (cached from client state)
+    private AutomatonEntity companion;
+
     public CompanionSettingsScreen(Screen parent) {
         super(Component.literal("同伴设置"));
         this.parent = parent;
         if (Minecraft.getInstance().player != null) {
             currentModel = CompanionConfig.getModel(Minecraft.getInstance().player.getUUID());
         }
+        // Read companion from client state
+        companion = CompanionClientState.getCompanion();
     }
 
     @Override
     protected void init() {
         clearWidgets();
+        viewHeight = this.height - 30;
+        int cx = this.width / 2;
 
-        // Calculate view height dynamically - leave 80px at bottom for close button
-        viewHeight = this.height - 80;
-        totalContentHeight = 420;
+        // Refresh companion reference
+        companion = CompanionClientState.getCompanion();
 
-        int centerX = this.width / 2;
+        // ===== Stats Section (top, compact) =====
+        int sy = 15 - (int) scrollOffset;
 
-        // Title
-        addRenderableWidget(Button.builder(Component.literal("§b§l同伴设置面板"), btn -> {})
-            .bounds(centerX - 60, 15 - (int) scrollOffset, 120, 20).build());
+        if (companion != null) {
+            String name = companion.getCustomName() != null
+                ? companion.getCustomName().getString() : "Companion";
+            int lv = companion.getLevel();
+            int hp = (int) companion.getHealth();
+            int maxHp = (int) companion.getMaxHealth();
+            String mode = companion.getWorkingMode();
+            String modeStr = switch (mode) {
+                case "guard" -> "§cGuard";
+                case "mine"  -> "§bMine";
+                case "chop"  -> "§6Chop";
+                case "patrol"-> "§7Patrol";
+                default      -> "§aFollow";
+            };
 
-        // ===== 皮肤 Section =====
-        int skinY = 50 - (int) scrollOffset;
+            addRenderableWidget(Button.builder(
+                Component.literal("§6§l" + name + "  §eLv." + lv + "  " + modeStr + "  §7HP: " + hp + "/" + maxHp),
+                btn -> {}).bounds(cx - 120, sy, 240, 16).build());
+        } else {
+            addRenderableWidget(Button.builder(
+                Component.literal("§7无同伴数据"),
+                btn -> {}).bounds(cx - 60, sy, 120, 16).build());
+        }
 
-        addRenderableWidget(Button.builder(Component.literal("§e皮肤选择"), btn -> {})
-            .bounds(centerX - 80, skinY, 160, 16).build());
+        // ===== Mode Row =====
+        int my = sy + 24;
 
+        addRenderableWidget(Button.builder(Component.literal("§a跟随"), btn -> sendCmd("companion follow"))
+            .bounds(cx - 120, my, 55, 20).build());
+        addRenderableWidget(Button.builder(Component.literal("§c守护"), btn -> sendCmd("companion guard"))
+            .bounds(cx - 60, my, 55, 20).build());
+        addRenderableWidget(Button.builder(Component.literal("§b挖掘"), btn -> sendCmd("companion mine"))
+            .bounds(cx, my, 55, 20).build());
+        addRenderableWidget(Button.builder(Component.literal("§6砍伐"), btn -> sendCmd("companion chop"))
+            .bounds(cx + 60, my, 55, 20).build());
+
+        // ===== Action Row =====
+        int ay = my + 28;
+
+        addRenderableWidget(Button.builder(Component.literal("§3传送"), btn -> sendCmd("companion teleport"))
+            .bounds(cx - 120, ay, 55, 20).build());
+        addRenderableWidget(Button.builder(Component.literal("§7隐藏"), btn -> sendCmd("companion hide"))
+            .bounds(cx - 60, ay, 55, 20).build());
+        addRenderableWidget(Button.builder(Component.literal("§e背包"), btn -> {
+            this.minecraft.setScreen(new CompanionInventoryScreen());
+        }).bounds(cx, ay, 55, 20).build());
+        addRenderableWidget(Button.builder(Component.literal("§a状态"), btn -> sendCmd("companion status"))
+            .bounds(cx + 60, ay, 55, 20).build());
+
+        // ===== Chat / Level =====
+        int cy = ay + 28;
+        addRenderableWidget(Button.builder(Component.literal("§b💬 和同伴聊天"), btn -> {
+            this.minecraft.setScreen(new ChatScreen("/companion chat "));
+        }).bounds(cx - 100, cy, 200, 18).build());
+
+        addRenderableWidget(Button.builder(Component.literal("§e📊 查看等级"), btn -> sendCmd("companion level"))
+            .bounds(cx - 100, cy + 22, 200, 18).build());
+
+        // ===== Skin Section =====
+        int sky = cy + 52;
         loadAvailableSkins();
 
-        addRenderableWidget(Button.builder(Component.literal("§a<"), btn -> {
-            if (!availableSkins.isEmpty()) {
-                selectedSkinIndex = (selectedSkinIndex - 1 + availableSkins.size()) % availableSkins.size();
-                init(); // Rebuild to update display
-            }
-        }).bounds(centerX - 100, skinY + 22, 30, 16).build());
+        addRenderableWidget(Button.builder(Component.literal("§e皮肤: "), btn -> {})
+            .bounds(cx - 120, sky, 40, 16).build());
 
         String skinName = availableSkins.isEmpty() ? "无" : availableSkins.get(selectedSkinIndex);
-        addRenderableWidget(Button.builder(Component.literal("§f" + skinName), btn -> {})
-            .bounds(centerX - 65, skinY + 22, 80, 16).build());
+        String displaySkin = skinName.length() > 12 ? skinName.substring(0, 10) + ".." : skinName;
+
+        addRenderableWidget(Button.builder(Component.literal("<"), btn -> {
+            if (!availableSkins.isEmpty()) {
+                selectedSkinIndex = (selectedSkinIndex - 1 + availableSkins.size()) % availableSkins.size();
+                init();
+            }
+        }).bounds(cx - 80, sky, 25, 16).build());
+
+        addRenderableWidget(Button.builder(Component.literal("§f" + displaySkin), btn -> {})
+            .bounds(cx - 52, sky, 70, 16).build());
 
         addRenderableWidget(Button.builder(Component.literal(">"), btn -> {
             if (!availableSkins.isEmpty()) {
                 selectedSkinIndex = (selectedSkinIndex + 1) % availableSkins.size();
-                init(); // Rebuild to update display
+                init();
             }
-        }).bounds(centerX + 20, skinY + 22, 30, 16).build());
+        }).bounds(cx + 20, sky, 25, 16).build());
 
-        addRenderableWidget(Button.builder(Component.literal("§b应用皮肤"), btn -> {
+        addRenderableWidget(Button.builder(Component.literal("§b应用"), btn -> {
             if (!availableSkins.isEmpty()) {
                 String skin = availableSkins.get(selectedSkinIndex);
-                Minecraft mc = Minecraft.getInstance();
-                if (mc.getConnection() != null) {
-                    mc.getConnection().sendCommand("companion skin " + skin);
-                    statusMessage = "§a已应用皮肤: " + skin;
-                } else {
-                    statusMessage = "§c无法执行命令";
-                }
+                sendCmd("companion skin " + skin);
+                statusMessage = "§a皮肤: " + skin;
             } else {
-                statusMessage = "§c没有可用皮肤";
+                statusMessage = "§c无皮肤";
             }
-        }).bounds(centerX - 80, skinY + 44, 100, 18).build());
+        }).bounds(cx + 50, sky, 40, 16).build());
 
-        addRenderableWidget(Button.builder(Component.literal("§e打开皮肤文件夹"), btn -> {
-            Minecraft mc = Minecraft.getInstance();
-            File skinsDir = new File(mc.gameDirectory.getPath(), "aicompanion/skins");
-            skinsDir.mkdirs();
-            try {
-                Desktop.getDesktop().open(skinsDir);
-            } catch (Exception e) {
-                mc.player.displayClientMessage(Component.literal("§c无法打开文件夹"), false);
-            }
-        }).bounds(centerX + 30, skinY + 44, 100, 18).build());
+        // ===== AI Model Section =====
+        int mdy = sky + 24;
 
-        // ===== AI模型 Section =====
-        int modelY = skinY + 80;
+        addRenderableWidget(Button.builder(Component.literal("§eAI模型: "), btn -> {})
+            .bounds(cx - 120, mdy, 55, 16).build());
 
-        addRenderableWidget(Button.builder(Component.literal("§eAI模型选择"), btn -> {})
-            .bounds(centerX - 80, modelY, 160, 16).build());
+        addRenderableWidget(Button.builder(Component.literal("<"), btn -> {
+            int idx = getCurrentModelIndex();
+            idx = (idx - 1 + AI_MODELS.length) % AI_MODELS.length;
+            currentModel = AI_MODELS[idx];
+            init();
+        }).bounds(cx - 60, mdy, 25, 16).build());
 
-        addRenderableWidget(Button.builder(Component.literal("§a<"), btn -> {
-            int currentIdx = getCurrentModelIndex();
-            currentIdx = (currentIdx - 1 + AI_MODELS.length) % AI_MODELS.length;
-            currentModel = AI_MODELS[currentIdx];
-            init(); // Rebuild to update display
-        }).bounds(centerX - 100, modelY + 22, 30, 16).build());
-
-        String displayModel = currentModel.length() > 12 ? currentModel.substring(0, 10) + ".." : currentModel;
+        String displayModel = currentModel.length() > 14 ? currentModel.substring(0, 12) + ".." : currentModel;
         addRenderableWidget(Button.builder(Component.literal("§f" + displayModel), btn -> {})
-            .bounds(centerX - 65, modelY + 22, 80, 16).build());
+            .bounds(cx - 32, mdy, 80, 16).build());
 
         addRenderableWidget(Button.builder(Component.literal(">"), btn -> {
-            int currentIdx = getCurrentModelIndex();
-            currentIdx = (currentIdx + 1) % AI_MODELS.length;
-            currentModel = AI_MODELS[currentIdx];
-            init(); // Rebuild to update display
-        }).bounds(centerX + 20, modelY + 22, 30, 16).build());
+            int idx = getCurrentModelIndex();
+            idx = (idx + 1) % AI_MODELS.length;
+            currentModel = AI_MODELS[idx];
+            init();
+        }).bounds(cx + 50, mdy, 25, 16).build());
 
-        addRenderableWidget(Button.builder(Component.literal("§d应用模型"), btn -> {
-            Minecraft mc = Minecraft.getInstance();
-            if (mc.getConnection() != null) {
-                mc.getConnection().sendCommand("companion model " + currentModel);
-                statusMessage = "§a已设置模型: " + currentModel;
-            } else {
-                statusMessage = "§c无法执行命令";
-            }
-        }).bounds(centerX - 80, modelY + 44, 100, 18).build());
+        addRenderableWidget(Button.builder(Component.literal("§d应用"), btn -> {
+            sendCmd("companion model " + currentModel);
+            statusMessage = "§a模型: " + currentModel;
+        }).bounds(cx + 80, mdy, 40, 16).build());
 
-        // ===== 命令快捷按钮 =====
-        int cmdY = modelY + 85;
+        // ===== Status message =====
+        if (!statusMessage.isEmpty()) {
+            addRenderableWidget(Button.builder(Component.literal(statusMessage), btn -> {})
+                .bounds(cx - 60, mdy + 24, 160, 14).build());
+        }
 
-        addRenderableWidget(Button.builder(Component.literal("§6----- 快捷命令 -----"), btn -> {})
-            .bounds(centerX - 80, cmdY, 160, 16).build());
-
-        addRenderableWidget(Button.builder(Component.literal("§e① 和同伴对话"), btn -> {
-            Minecraft mc = Minecraft.getInstance();
-            mc.setScreen(new ChatScreen("/companion chat "));
-        }).bounds(centerX - 100, cmdY + 20, 200, 14).build());
-
-        addRenderableWidget(Button.builder(Component.literal("§e② 查看皮肤列表"), btn -> {
-            Minecraft mc = Minecraft.getInstance();
-            if (mc.getConnection() != null) {
-                mc.getConnection().sendCommand("companion list");
-            }
-        }).bounds(centerX - 100, cmdY + 36, 200, 14).build());
-
-        addRenderableWidget(Button.builder(Component.literal("§e③ 恢复默认皮肤"), btn -> {
-            Minecraft mc = Minecraft.getInstance();
-            if (mc.getConnection() != null) {
-                mc.getConnection().sendCommand("companion default");
-            }
-        }).bounds(centerX - 100, cmdY + 52, 200, 14).build());
-
-        addRenderableWidget(Button.builder(Component.literal("§e④ 查看当前模型"), btn -> {
-            Minecraft mc = Minecraft.getInstance();
-            if (mc.getConnection() != null) {
-                mc.getConnection().sendCommand("companion model");
-            }
-        }).bounds(centerX - 100, cmdY + 68, 200, 14).build());
-
-        // ===== 模式切换 Section =====
-        int modeY = cmdY + 95;
-
-        addRenderableWidget(Button.builder(Component.literal("§6----- 伙伴模式 -----"), btn -> {})
-            .bounds(centerX - 80, modeY, 160, 16).build());
-
-        addRenderableWidget(Button.builder(Component.literal("§c⚔ 守护模式"), btn -> {
-            Minecraft mc = Minecraft.getInstance();
-            if (mc.getConnection() != null) {
-                mc.getConnection().sendCommand("companion guard");
-                statusMessage = "§a已切换守护模式";
-            }
-        }).bounds(centerX - 100, modeY + 20, 95, 20).build());
-
-        addRenderableWidget(Button.builder(Component.literal("§b⛏ 挖掘模式"), btn -> {
-            Minecraft mc = Minecraft.getInstance();
-            if (mc.getConnection() != null) {
-                mc.getConnection().sendCommand("companion mine");
-                statusMessage = "§a已切换挖掘模式";
-            }
-        }).bounds(centerX + 5, modeY + 20, 95, 20).build());
-
-        addRenderableWidget(Button.builder(Component.literal("§6🪓 砍伐模式"), btn -> {
-            Minecraft mc = Minecraft.getInstance();
-            if (mc.getConnection() != null) {
-                mc.getConnection().sendCommand("companion chop");
-                statusMessage = "§a已切换砍伐模式";
-            }
-        }).bounds(centerX - 100, modeY + 44, 95, 20).build());
-
-        addRenderableWidget(Button.builder(Component.literal("§e🎒 打开背包"), btn -> {
-            Minecraft mc = Minecraft.getInstance();
-            if (mc.getConnection() != null) {
-                mc.getConnection().sendCommand("companion inventory");
-                statusMessage = "§a已打开背包";
-            }
-        }).bounds(centerX + 5, modeY + 44, 95, 20).build());
-
-        addRenderableWidget(Button.builder(Component.literal(statusMessage), btn -> {})
-            .bounds(centerX - 90, cmdY + 86, 200, 16).build());
-
-        addRenderableWidget(Button.builder(Component.literal("§c关闭"), btn -> {
-            this.onClose();
-        }).bounds(centerX - 30, modeY + 80, 60, 18).build());
+        // ===== Close =====
+        addRenderableWidget(Button.builder(Component.literal("§c关闭"), btn -> onClose())
+            .bounds(cx - 30, mdy + 50, 60, 18).build());
     }
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
-        // Scroll with mouse wheel
-        int scrollStep = 20;
-        int maxScroll = Math.max(0, totalContentHeight - viewHeight);
-
-        scrollOffset -= verticalAmount * scrollStep;
+        int maxScroll = Math.max(0, CONTENT_HEIGHT - viewHeight);
+        scrollOffset -= verticalAmount * 20;
         scrollOffset = Math.max(0, Math.min(scrollOffset, maxScroll));
-
-        // Rebuild widgets with new scroll position
         init();
         return true;
     }
@@ -237,30 +207,48 @@ public class CompanionSettingsScreen extends Screen {
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         // Gradient background
-        graphics.fill(0, 0, this.width, this.height, 0xC0_1a1a2e);
-        graphics.fill(0, 0, this.width, this.height / 2, 0xC0_16213e);
+        graphics.fill(0, 0, this.width, this.height, 0xC01a1a2e);
+        graphics.fill(0, 0, this.width, this.height / 2, 0xC016213e);
 
         super.render(graphics, mouseX, mouseY, partialTick);
 
-        // Draw scroll hint if content is scrollable
-        if (totalContentHeight > viewHeight) {
-            int scrollBarX = this.width - 15;
-            int scrollBarHeight = 60;
-            int maxScroll = Math.max(1, totalContentHeight - viewHeight);
-            int thumbY = (int) (scrollOffset / maxScroll * (viewHeight - scrollBarHeight)) + 50;
+        // Draw companion health bar below stats if available
+        if (companion != null) {
+            int cx = this.width / 2;
+            int barX = cx - 80;
+            int barY = 35 - (int) scrollOffset;
+            float health = companion.getHealth();
+            float maxHealth = companion.getMaxHealth();
+            float pct = Math.min(health / maxHealth, 1.0f);
 
-            graphics.fill(scrollBarX, 50, scrollBarX + 6, 50 + viewHeight, 0x80_334155);
-            graphics.fill(scrollBarX, thumbY, scrollBarX + 6, thumbY + scrollBarHeight, 0xFF_10B981);
+            // Background
+            graphics.fill(barX, barY, barX + 160, barY + 4, 0xFF555555);
+            // Fill
+            int fillW = (int) (160 * pct);
+            int color = pct > 0.5f ? 0xFF00AA00 : (pct > 0.25f ? 0xFFFFAA00 : 0xFFFF5555);
+            if (fillW > 0) {
+                graphics.fill(barX, barY, barX + fillW, barY + 4, color);
+            }
+        }
+
+        // Scrollbar
+        if (CONTENT_HEIGHT > viewHeight) {
+            int sx = this.width - 15;
+            int maxScroll = Math.max(1, CONTENT_HEIGHT - viewHeight);
+            int thumbH = 60;
+            int thumbY = (int) (scrollOffset / maxScroll * (viewHeight - thumbH)) + 10;
+            graphics.fill(sx, 10, sx + 6, 10 + viewHeight, 0x80334155);
+            graphics.fill(sx, thumbY, sx + 6, thumbY + thumbH, 0xFF10B981);
         }
     }
 
     private void loadAvailableSkins() {
         availableSkins.clear();
-        File skinsDir = new File(getSkinsPath());
+        java.io.File skinsDir = new java.io.File(getSkinsPath());
         if (skinsDir.exists() && skinsDir.isDirectory()) {
-            File[] files = skinsDir.listFiles((dir, name) -> name.endsWith(".png"));
+            java.io.File[] files = skinsDir.listFiles((dir, name) -> name.endsWith(".png"));
             if (files != null) {
-                for (File f : files) {
+                for (java.io.File f : files) {
                     availableSkins.add(f.getName().replace(".png", ""));
                 }
             }
@@ -279,6 +267,12 @@ public class CompanionSettingsScreen extends Screen {
             if (AI_MODELS[i].equals(currentModel)) return i;
         }
         return 0;
+    }
+
+    private void sendCmd(String cmd) {
+        if (this.minecraft != null && this.minecraft.getConnection() != null) {
+            this.minecraft.getConnection().sendCommand(cmd);
+        }
     }
 
     @Override

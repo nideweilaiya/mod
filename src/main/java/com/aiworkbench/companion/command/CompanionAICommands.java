@@ -17,26 +17,26 @@ import net.minecraftforge.fml.loading.FMLLoader;
 public class CompanionAICommands {
 
     /**
-     * Register non-OP AI commands: chat, chat clear
+     * Register non-OP AI commands: chat, chat clear, gui
      */
     public static void registerNonOp(LiteralArgumentBuilder<CommandSourceStack> parent) {
         parent.then(Commands.literal("chat")
                         .then(Commands.argument("message", StringArgumentType.greedyString())
                                 .executes(ctx -> chatWithAI(ctx.getSource(), StringArgumentType.getString(ctx, "message"))))
                         .then(Commands.literal("clear")
-                                .executes(ctx -> clearChat(ctx.getSource()))));
+                                .executes(ctx -> clearChat(ctx.getSource()))))
+                .then(Commands.literal("gui")
+                        .executes(ctx -> openGUI(ctx.getSource())));
     }
 
     /**
-     * Register OP-only AI commands: model, gui
+     * Register OP-only AI commands: model
      */
     public static void register(LiteralArgumentBuilder<CommandSourceStack> parent) {
         parent.then(Commands.literal("model")
                         .then(Commands.argument("name", StringArgumentType.greedyString())
                                 .executes(ctx -> setModel(ctx.getSource(), StringArgumentType.getString(ctx, "name"))))
-                        .executes(ctx -> showModel(ctx.getSource())))
-                .then(Commands.literal("gui")
-                        .executes(ctx -> openGUI(ctx.getSource())));
+                        .executes(ctx -> showModel(ctx.getSource())));
     }
 
     private static int chatWithAI(CommandSourceStack source, String message) {

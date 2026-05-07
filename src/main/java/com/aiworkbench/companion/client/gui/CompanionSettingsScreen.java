@@ -104,7 +104,10 @@ public class CompanionSettingsScreen extends Screen {
         addRenderableWidget(Button.builder(Component.literal("§7隐藏"), btn -> sendCmd("companion hide"))
             .bounds(cx - 60, ay, 55, 20).build());
         addRenderableWidget(Button.builder(Component.literal("§e背包"), btn -> {
-            this.minecraft.setScreen(new CompanionInventoryScreen());
+            if (this.minecraft.player != null && this.minecraft.player.connection != null) {
+                this.minecraft.player.connection.sendCommand("companion openinv");
+            }
+            this.onClose();
         }).bounds(cx, ay, 55, 20).build());
         addRenderableWidget(Button.builder(Component.literal("§a状态"), btn -> sendCmd("companion status"))
             .bounds(cx + 60, ay, 55, 20).build());

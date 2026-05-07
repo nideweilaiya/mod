@@ -59,6 +59,7 @@ public class CompanionChopGoal extends Goal {
 
     @Override
     public boolean canUse() {
+        if (companion.isSkillActive()) return false;
         // Only active when chop mode is enabled
         if (!companion.isChopModeEnabled()) {
             return false;

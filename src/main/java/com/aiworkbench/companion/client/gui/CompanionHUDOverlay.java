@@ -48,6 +48,20 @@ public class CompanionHUDOverlay {
             if (!hudEnabled) return;
             if (mc.font == null) return;
 
+            // ====== 聊天模式指示器（顶部居中，无关是否有同伴） ======
+            if (CompanionClientState.isChatMode()) {
+                int topCenterX = screenWidth / 2;
+                String chatModeText = "§b💬 聊天模式 — 消息将发送给同伴";
+                int textW = mc.font.width(chatModeText);
+                int bgW = textW + 16;
+                int bgX = topCenterX - bgW / 2;
+                int bgY = 2;
+                graphics.fill(bgX, bgY, bgX + bgW, bgY + 14, 0x90000000);
+                graphics.fill(bgX, bgY, bgX + bgW, bgY + 1, 0xFF10B981);
+                graphics.drawString(mc.font, chatModeText, bgX + 8, bgY + 3, 0xFFFFFF, false);
+            }
+
+            // ====== 同伴面板（右上角） ======
             AutomatonEntity companion = CompanionClientState.getCompanion();
             if (companion == null) return;
 

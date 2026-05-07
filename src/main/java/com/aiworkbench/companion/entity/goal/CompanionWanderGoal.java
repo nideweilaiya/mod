@@ -42,6 +42,7 @@ public class CompanionWanderGoal extends Goal {
 
     @Override
     public boolean canUse() {
+        if (companion.isSkillActive()) return false;
         // Don't wander if we have an owner nearby
         Player owner = getOwnerInDimension();
         if (owner != null && companion.distanceTo(owner) < 8.0) {

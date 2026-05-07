@@ -81,4 +81,32 @@ public class CompanionClientState {
     public static boolean hasCompanion() {
         return getCompanion() != null;
     }
+
+    // ==================== 聊天模式（L键切换） ====================
+
+    private static boolean chatMode = false;
+
+    /**
+     * 聊天模式是否开启。开启后玩家发送的所有聊天消息
+     * 自动重定向为 /companion chat &lt;消息&gt;，无需手动输命令前缀。
+     */
+    public static boolean isChatMode() {
+        return chatMode;
+    }
+
+    /**
+     * 切换聊天模式开关状态。
+     * @return 切换后的状态
+     */
+    public static boolean toggleChatMode() {
+        chatMode = !chatMode;
+        return chatMode;
+    }
+
+    /**
+     * 直接设置聊天模式状态。
+     */
+    public static void setChatMode(boolean mode) {
+        chatMode = mode;
+    }
 }

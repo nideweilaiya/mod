@@ -157,9 +157,11 @@ public class CompanionListScreen extends Screen {
         addRenderableWidget(Button.builder(
                 Component.literal("§e🎒 打开背包"),
                 btn -> {
-                    // Close this screen and open inventory GUI
+                    // Close this screen and open companion inventory via Container
                     onClose();
-                    Minecraft.getInstance().setScreen(new CompanionInventoryScreen());
+                    if (Minecraft.getInstance().player != null && Minecraft.getInstance().player.connection != null) {
+                        Minecraft.getInstance().player.connection.sendCommand("companion openinv");
+                    }
                 })
                 .bounds(centerX - 80, actionY, 75, 22)
                 .build());

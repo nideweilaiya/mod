@@ -45,7 +45,6 @@ public class BridgeClient implements AutoCloseable {
     private volatile boolean running = false;
     private int reconnectAttempts = 0;
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
-    private final Map<String, ScheduledFuture<?>> pendingDialogueHides = new ConcurrentHashMap<>();
     private volatile long lastPongTime = 0;
     private ScheduledFuture<?> heartbeatFuture;
     private final Random random = new Random();

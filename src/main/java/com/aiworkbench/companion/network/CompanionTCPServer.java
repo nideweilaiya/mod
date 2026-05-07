@@ -41,7 +41,6 @@ public class CompanionTCPServer {
     private final Map<Integer, ClientHandler> clients = new ConcurrentHashMap<>();
     private final Object broadcastLock = new Object();
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
-    private final Map<String, ScheduledFuture<?>> pendingDialogueHides = new ConcurrentHashMap<>();
 
     public CompanionTCPServer() {}
 
@@ -71,9 +70,9 @@ public class CompanionTCPServer {
 
     private void serverLoop() {
         try {
-            serverSocket = new ServerSocket(PORT);
+            serverSocket = new ServerSocket(PORT, 50, java.net.InetAddress.getByName("127.0.0.1"));
             serverSocket.setReuseAddress(true);
-            AICompanionMod.LOGGER.info("Waiting for Python client connection on port " + PORT);
+            AICompanionMod.LOGGER.info("Waiting for Python client connection on 127.0.0.1:" + PORT);
 
             while (running) {
                 try {

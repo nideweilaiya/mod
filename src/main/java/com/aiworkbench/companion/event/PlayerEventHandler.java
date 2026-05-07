@@ -3,9 +3,14 @@ package com.aiworkbench.companion.event;
 import com.aiworkbench.companion.AICompanionMod;
 import com.aiworkbench.companion.entity.AutomatonEntity;
 import com.aiworkbench.companion.manager.CompanionManager;
+import net.minecraft.core.BlockPos;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraftforge.event.entity.EntityJoinLevelEvent;
 import net.minecraftforge.event.entity.living.LivingDeathEvent;
@@ -17,6 +22,7 @@ import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
 import java.util.HashSet;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -92,7 +98,8 @@ public class PlayerEventHandler {
             AutomatonEntity existing = manager.getCompanion(playerId);
             if (existing != null && !existing.isAlive()) {
                 manager.removeCompanion(playerId);
-                AICompanionMod.LOGGER.info("Player {} died, removing dead companion", player.getName().getString());
+                clearCompanionFromPlayerNBT(player);
+                AICompanionMod.LOGGER.info("Player {} died, removing dead companion and clearing NBT", player.getName().getString());
             }
         }
         spawnedPlayers.remove(playerId);
@@ -151,8 +158,10 @@ public class PlayerEventHandler {
                     AICompanionMod.bridgeClient.sendPlayerInteract(companionId, playerName, "right_click");
                 }
 
-                // 打开同伴背包（通过聊天消息触发客户端打开GUI）
-                player.sendSystemMessage(net.minecraft.network.chat.Component.literal("[OPEN_INVENTORY]"));
+                // 潜行+右键 → 打开同伴背包 Container
+                if (player.isShiftKeyDown()) {
+                    player.openMenu(companion);
+                }
 
                 // 标记事件已处理
                 event.setCanceled(true);
@@ -234,6 +243,7 @@ public class PlayerEventHandler {
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
 
         UUID playerId = player.getUUID();
+        // 清理追踪记录，防止长期运行服务器内存累积
         spawnedPlayers.remove(playerId);
         AICompanionMod.LOGGER.info("Player {} logged out, companion entity kept in world", player.getName().getString());
 
@@ -242,14 +252,23 @@ public class PlayerEventHandler {
             AICompanionMod.tcpServer.onPlayerQuit(player.getName().getString());
         }
         // Notify Bridge Client
-        if (AICompanionMod.bridgeClient != null && AICompanionMod.bridgeClient.isConnected()) {
+        if (AICompanionMod.bridgeClient != null && AICompanionMod.bridgeClient.isConnected()
+                && AICompanionMod.companionManager != null) {
+            var companion = AICompanionMod.companionManager.getCompanion(playerId);
             AICompanionMod.bridgeClient.sendCompanionRemoved(
-                AICompanionMod.companionManager.getCompanion(playerId) != null
-                    ? AICompanionMod.companionManager.getCompanion(playerId).getUUID().toString()
-                    : ""
+                companion != null ? companion.getUUID().toString() : ""
             );
         }
     }
+
+    // ==================== 持久化 NBT 标签 ====================
+
+    private static final String TAG_COMPANION_UUID = "aicompanion.companion_uuid_most";
+    private static final String TAG_COMPANION_UUID_LSB = "aicompanion.companion_uuid_least";
+    private static final String TAG_COMPANION_DIM = "aicompanion.companion_dim";
+    private static final String TAG_COMPANION_X = "aicompanion.companion_x";
+    private static final String TAG_COMPANION_Y = "aicompanion.companion_y";
+    private static final String TAG_COMPANION_Z = "aicompanion.companion_z";
 
     /**
      * 为玩家生成同伴NPC
@@ -260,20 +279,7 @@ public class PlayerEventHandler {
         CompanionManager manager = AICompanionMod.companionManager;
 
         try {
-            // 先在世界中查找是否已存在属于该玩家的伴侣实体（从NBT加载的）
-            AutomatonEntity existingInWorld = findCompanionByOwner(level, playerId);
-            if (existingInWorld != null && existingInWorld.isAlive()) {
-                AICompanionMod.LOGGER.info("Player {} found existing companion {} in world, re-registering",
-                    player.getName().getString(), existingInWorld.getUUID());
-                if (manager != null) {
-                    manager.addCompanion(playerId, existingInWorld);
-                    AICompanionMod.LOGGER.info("Re-registered existing companion. Manager now has: {}",
-                        manager.getCompanion(playerId) != null ? "VALID" : "NULL");
-                }
-                return;
-            }
-
-            // 检查manager中是否已有有效实体
+            // 第一步：检查 manager 中是否已有有效实体
             if (manager != null) {
                 AutomatonEntity existing = manager.getCompanion(playerId);
                 if (existing != null && existing.isAlive()) {
@@ -283,7 +289,40 @@ public class PlayerEventHandler {
                 }
             }
 
-            // 创建新实体
+            // 第二步：从玩家 NBT 恢复旧同伴（跨会话持久化）
+            AutomatonEntity restored = loadCompanionFromPlayerNBT(player);
+            if (restored != null && restored.isAlive()) {
+                AICompanionMod.LOGGER.info("Player {} restored companion {} from NBT, teleporting to player",
+                    player.getName().getString(), restored.getUUID());
+                if (manager != null) {
+                    manager.addCompanion(playerId, restored);
+                }
+                // 传送到玩家当前位置
+                if (!restored.level().dimension().equals(level.dimension())) {
+                    restored.teleportTo(level, player.getX(), player.getY(), player.getZ(),
+                        java.util.Set.of(), player.getYRot(), player.getXRot());
+                } else {
+                    restored.teleportTo(player.getX(), player.getY(), player.getZ());
+                }
+                restored.setDeltaMovement(0, 0, 0);
+                restored.fallDistance = 0;
+                restored.showDialogue("§a我回来了！", 40);
+                return;
+            }
+
+            // 第三步：扫描所有已加载区块中的同伴
+            AutomatonEntity existingInWorld = findCompanionByOwner(level, playerId);
+            if (existingInWorld != null && existingInWorld.isAlive()) {
+                AICompanionMod.LOGGER.info("Player {} found existing companion {} in loaded chunks, re-registering",
+                    player.getName().getString(), existingInWorld.getUUID());
+                if (manager != null) {
+                    manager.addCompanion(playerId, existingInWorld);
+                    saveCompanionToPlayerNBT(player, existingInWorld);
+                }
+                return;
+            }
+
+            // 第四步：以上都未找到，创建新实体
             AutomatonEntity companion = AutomatonEntity.create(
                 level,
                 "default_companion",
@@ -304,6 +343,8 @@ public class PlayerEventHandler {
 
             if (manager != null) {
                 manager.addCompanion(playerId, companion);
+                // Save to player persistent NBT so re-login can find this companion
+                saveCompanionToPlayerNBT(player, companion);
                 // Verify registration
                 AutomatonEntity verify = manager.getCompanion(playerId);
                 AICompanionMod.LOGGER.info("After addCompanion, getCompanion returns: {}",
@@ -384,6 +425,93 @@ public class PlayerEventHandler {
                 }
             }
         }
+        return null;
+    }
+
+    // ==================== 同伴 NBT 持久化 ====================
+
+    /**
+     * 将同伴信息保存到玩家的持久 NBT 数据。
+     * 用于跨会话恢复同伴实体。
+     */
+    private void saveCompanionToPlayerNBT(ServerPlayer player, AutomatonEntity companion) {
+        CompoundTag data = player.getPersistentData();
+        data.putUUID(TAG_COMPANION_UUID, companion.getUUID());
+        data.putDouble(TAG_COMPANION_X, companion.getX());
+        data.putDouble(TAG_COMPANION_Y, companion.getY());
+        data.putDouble(TAG_COMPANION_Z, companion.getZ());
+        data.putString(TAG_COMPANION_DIM, companion.level().dimension().location().toString());
+    }
+
+    /**
+     * 清除玩家 NBT 中的同伴信息（同伴死亡时调用）。
+     */
+    private void clearCompanionFromPlayerNBT(ServerPlayer player) {
+        CompoundTag data = player.getPersistentData();
+        data.remove(TAG_COMPANION_UUID);
+        data.remove(TAG_COMPANION_UUID_LSB);
+        data.remove(TAG_COMPANION_X);
+        data.remove(TAG_COMPANION_Y);
+        data.remove(TAG_COMPANION_Z);
+        data.remove(TAG_COMPANION_DIM);
+    }
+
+    /**
+     * 从玩家 NBT 读取同伴 UUID，尝试在世界中加载该实体。
+     * 会强制加载同伴所在区块以确保能找到。
+     * @return 找到且存活的同伴，null 表示无法恢复
+     */
+    @javax.annotation.Nullable
+    private AutomatonEntity loadCompanionFromPlayerNBT(ServerPlayer player) {
+        CompoundTag data = player.getPersistentData();
+        if (!data.contains(TAG_COMPANION_UUID) || !data.contains(TAG_COMPANION_UUID_LSB)) {
+            return null;
+        }
+        if (!data.contains(TAG_COMPANION_DIM)) return null;
+
+        UUID companionUUID = data.getUUID(TAG_COMPANION_UUID);
+        String dimStr = data.getString(TAG_COMPANION_DIM);
+
+        // 找到正确维度
+        ServerLevel targetLevel = null;
+        if (AICompanionMod.server != null) {
+            for (ServerLevel sl : AICompanionMod.server.getAllLevels()) {
+                if (sl.dimension().location().toString().equals(dimStr)) {
+                    targetLevel = sl;
+                    break;
+                }
+            }
+        }
+        if (targetLevel == null) return null;
+
+        // 强制加载区块
+        if (data.contains(TAG_COMPANION_X)) {
+            int cx = ((int) data.getDouble(TAG_COMPANION_X)) >> 4;
+            int cz = ((int) data.getDouble(TAG_COMPANION_Z)) >> 4;
+            targetLevel.getChunk(cx, cz);
+        }
+
+        // 尝试获取实体
+        net.minecraft.world.entity.Entity entity = targetLevel.getEntity(companionUUID);
+        if (entity instanceof AutomatonEntity ae && ae.isAlive()) {
+            return ae;
+        }
+
+        // 实体不在已加载实体中，尝试按区块扫描
+        if (data.contains(TAG_COMPANION_X)) {
+            BlockPos pos = BlockPos.containing(
+                data.getDouble(TAG_COMPANION_X),
+                data.getDouble(TAG_COMPANION_Y),
+                data.getDouble(TAG_COMPANION_Z)
+            );
+            AABB box = new AABB(pos).inflate(2);
+            for (AutomatonEntity ae : targetLevel.getEntitiesOfClass(AutomatonEntity.class, box)) {
+                if (ae.getUUID().equals(companionUUID) && ae.isAlive()) {
+                    return ae;
+                }
+            }
+        }
+
         return null;
     }
 

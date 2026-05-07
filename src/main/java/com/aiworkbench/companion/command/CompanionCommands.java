@@ -1,5 +1,8 @@
 package com.aiworkbench.companion.command;
 
+import com.aiworkbench.companion.AICompanionMod;
+import com.aiworkbench.companion.entity.AutomatonEntity;
+import com.aiworkbench.companion.skill.SkillCommand;
 import com.mojang.brigadier.CommandDispatcher;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -33,7 +36,13 @@ public class CompanionCommands {
         CompanionLifecycleCommands.registerAdmin(base);
         CompanionSkinCommands.register(base);
         CompanionAICommands.register(base);
-        CompanionInventoryCommands.register(base);
+
+        // openinv — 打开同伴背包 Container（替代旧聊天协议）
+        base.then(Commands.literal("openinv")
+                .executes(ctx -> openCompanionInventory(ctx.getSource())));
+
+        // Skill system subcommands
+        SkillCommand.register(base);
 
         // Quick control menu (no OP required)
         base.then(Commands.literal("menu")
@@ -85,6 +94,26 @@ public class CompanionCommands {
         msg.append(Component.literal("§7§o点击按钮快速切换同伴模式"));
 
         player.sendSystemMessage(msg);
+        return 1;
+    }
+
+    /**
+     * 打开同伴背包 Container（替代旧聊天协议方式）。
+     */
+    private static int openCompanionInventory(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) {
+            source.sendFailure(Component.literal("Must be used by a player"));
+            return 0;
+        }
+
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("你没有同伴"));
+            return 0;
+        }
+
+        player.openMenu(companion);
         return 1;
     }
 

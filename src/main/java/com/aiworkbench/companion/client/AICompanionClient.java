@@ -1,9 +1,11 @@
 package com.aiworkbench.companion.client;
 
 import com.aiworkbench.companion.AICompanionMod;
+import com.aiworkbench.companion.client.gui.CompanionContainerScreen;
 import com.aiworkbench.companion.client.gui.CompanionHUDOverlay;
 import com.aiworkbench.companion.client.render.RenderAutomaton;
 import com.aiworkbench.companion.entity.EntityInit;
+import net.minecraft.client.gui.screens.MenuScreens;
 import net.minecraft.world.entity.Entity;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.EntityRenderersEvent;
@@ -43,6 +45,12 @@ public class AICompanionClient {
     @SubscribeEvent
     public static void onClientSetup(FMLClientSetupEvent event) {
         AICompanionMod.LOGGER.info("AI Companion Client setup complete");
+
+        // 注册 Container Screen 绑定
+        event.enqueueWork(() -> {
+            MenuScreens.register(AICompanionMod.COMPANION_CONTAINER.get(), CompanionContainerScreen::new);
+            AICompanionMod.LOGGER.info("Companion Container Screen registered");
+        });
     }
 
     @SubscribeEvent

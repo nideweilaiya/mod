@@ -8,6 +8,8 @@
   "key.aicompanion.follow_cancel": "Cancel Task & Follow",
   "key.aicompanion.toggle_hud": "Toggle Companion HUD",
   "key.aicompanion.control_menu": "Open Control Menu",
+  "key.aicompanion.skill_screen": "Open Skill Library",
+  "key.aicompanion.chat_mode": "Toggle Chat Mode (Direct Chat)",
   "gui.aicompanion.title": "AI Companion",
   "gui.aicompanion.loading": "Loading...",
   "gui.aicompanion.no_companions": "No companions available",

@@ -3,12 +3,14 @@ package com.aiworkbench.companion.client;
 import com.aiworkbench.companion.AICompanionMod;
 import com.aiworkbench.companion.client.gui.CompanionHUDOverlay;
 import com.aiworkbench.companion.client.gui.CompanionListScreen;
-import com.aiworkbench.companion.client.gui.CompanionInventoryScreen;
 import com.aiworkbench.companion.client.gui.CompanionSettingsScreen;
+import com.aiworkbench.companion.client.gui.SkillScreen;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.commands.Commands;
+import net.minecraft.network.chat.Component;
 import net.minecraftforge.api.distmarker.Dist;
+import net.minecraftforge.client.event.ClientChatEvent;
 import net.minecraftforge.client.event.InputEvent.Key;
 import net.minecraftforge.client.event.RegisterKeyMappingsEvent;
 import net.minecraftforge.common.MinecraftForge;
@@ -31,8 +33,10 @@ public class CompanionKeyHandler {
     public static final String KEY_FOLLOW_CANCEL = "key.aicompanion.follow_cancel";
     public static final String KEY_TOGGLE_HUD = "key.aicompanion.toggle_hud";
     public static final String KEY_CONTROL_MENU = "key.aicompanion.control_menu";
+    public static final String KEY_SKILL_SCREEN = "key.aicompanion.skill_screen";
+    public static final String KEY_CHAT_MODE = "key.aicompanion.chat_mode";
 
-    // Keys: C=list, G=settings, B=backpack, K=teleport, V=follow toggle, ESC=cancel task, H=HUD, N=menu
+    // Keys: C=list, G=settings, B=backpack, K=teleport, V=follow toggle, ESC=cancel task, H=HUD, N=menu, P=skills, J=chat mode
     public static final KeyMapping OPEN_LIST_KEY = new KeyMapping(
         KEY_OPEN_GUI,
         GLFW.GLFW_KEY_C,
@@ -85,6 +89,20 @@ public class CompanionKeyHandler {
         CATEGORY
     );
 
+    // P键 - 打开技能库
+    public static final KeyMapping SKILL_SCREEN_KEY = new KeyMapping(
+        KEY_SKILL_SCREEN,
+        GLFW.GLFW_KEY_P,
+        CATEGORY
+    );
+
+    // J键 - 切换聊天模式（L被原版成就占用）
+    public static final KeyMapping CHAT_MODE_KEY = new KeyMapping(
+        KEY_CHAT_MODE,
+        GLFW.GLFW_KEY_J,
+        CATEGORY
+    );
+
     // Cooldown tracking (client-side)
     private static final long TELEPORT_COOLDOWN_MS = 60000; // 1 minute
     private static long lastTeleportTime = 0;
@@ -101,6 +119,8 @@ public class CompanionKeyHandler {
             event.register(FOLLOW_CANCEL_KEY);
             event.register(TOGGLE_HUD_KEY);
             event.register(CONTROL_MENU_KEY);
+            event.register(SKILL_SCREEN_KEY);
+            event.register(CHAT_MODE_KEY);
         }
     }
 
@@ -125,9 +145,9 @@ public class CompanionKeyHandler {
                 mc.setScreen(new CompanionSettingsScreen(null));
             }
 
-            // B 键 - 直接打开背包
+            // B 键 - 打开同伴背包 Container
             if (OPEN_BACKPACK_KEY.consumeClick()) {
-                mc.setScreen(new CompanionInventoryScreen());
+                mc.player.connection.sendCommand("companion openinv");
             }
 
             // K 键 - 传送同伴（1分钟冷却）
@@ -177,6 +197,54 @@ public class CompanionKeyHandler {
             if (CONTROL_MENU_KEY.consumeClick()) {
                 mc.player.connection.sendCommand("companion menu");
                 AICompanionMod.LOGGER.info("[KeyHandler] N key pressed: opening control menu");
+            }
+
+            // P 键 - 打开技能库
+            if (SKILL_SCREEN_KEY.consumeClick()) {
+                mc.setScreen(new SkillScreen(null));
+                AICompanionMod.LOGGER.info("[KeyHandler] P key pressed: opening skill screen");
+            }
+
+            // J 键 - 切换聊天模式
+            if (CHAT_MODE_KEY.consumeClick()) {
+                boolean now = CompanionClientState.toggleChatMode();
+                if (now) {
+                    mc.player.displayClientMessage(
+                        Component.literal("§b[聊天模式] §f已开启 — 打字直接与同伴对话，/ 开头发普通指令"),
+                        true
+                    );
+                    AICompanionMod.LOGGER.info("[KeyHandler] Chat mode ON");
+                } else {
+                    mc.player.displayClientMessage(
+                        Component.literal("§7[聊天模式] 已关闭"),
+                        true
+                    );
+                    AICompanionMod.LOGGER.info("[KeyHandler] Chat mode OFF");
+                }
+            }
+        }
+
+        /**
+         * 拦截客户端聊天消息。聊天模式开启时，普通消息自动转为 /companion chat 命令，
+         * 以 / 开头的命令不受影响。
+         */
+        @SubscribeEvent
+        public void onClientChat(ClientChatEvent event) {
+            if (!CompanionClientState.isChatMode()) return;
+
+            String message = event.getMessage();
+            if (message == null || message.isEmpty()) return;
+
+            // 以 / 开头的命令放行，不拦截
+            if (message.startsWith("/")) return;
+
+            // 取消原聊天消息发送
+            event.setCanceled(true);
+
+            // 转为 /companion chat <消息> 发送到服务端
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.player != null && mc.player.connection != null) {
+                mc.player.connection.sendCommand("companion chat " + message);
             }
         }
     }

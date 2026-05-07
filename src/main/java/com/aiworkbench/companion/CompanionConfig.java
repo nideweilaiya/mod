@@ -26,7 +26,7 @@ public class CompanionConfig {
     /**
      * Load config from file
      */
-    public static void load(MinecraftServer server) {
+    public static synchronized void load(MinecraftServer server) {
         if (loaded) return;
 
         try {

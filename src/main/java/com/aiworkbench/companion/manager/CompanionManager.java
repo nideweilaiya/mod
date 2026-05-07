@@ -39,6 +39,10 @@ public class CompanionManager {
         if (companionUUID != null) {
             companionToPlayerMap.remove(companionUUID);
             AICompanionMod.LOGGER.info("Removing companion {} for player {}", companionUUID, playerUUID);
+            // 清理 AI 大脑，防止内存泄漏
+            if (AICompanionMod.aiManager != null) {
+                AICompanionMod.aiManager.removeAI(companionUUID);
+            }
             // 使用O(1) UUID查找删除实体
             if (AICompanionMod.server != null) {
                 for (ServerLevel level : AICompanionMod.server.getAllLevels()) {
@@ -60,6 +64,10 @@ public class CompanionManager {
         UUID playerUUID = companionToPlayerMap.remove(companionUUID);
         if (playerUUID != null) {
             playerToCompanionMap.remove(playerUUID);
+        }
+        // 清理 AI 大脑，防止内存泄漏
+        if (AICompanionMod.aiManager != null) {
+            AICompanionMod.aiManager.removeAI(companionUUID);
         }
         if (AICompanionMod.server != null) {
             for (ServerLevel level : AICompanionMod.server.getAllLevels()) {

@@ -23,7 +23,7 @@ public class EntityAttributeEvents {
             AttributeSupplier supplier = AutomatonEntity.createAttributes().build();
             event.put(EntityInit.AUTOMATON.get(), supplier);
             AICompanionMod.LOGGER.info("[Attributes] SUCCESS - Attributes registered for aicompanion:automaton");
-            AICompanionMod.LOGGER.info("[Attributes]   MAX_HEALTH: 60.0, ARMOR: 4.0, ARMOR_TOUGHNESS: 4.0, MOVEMENT_SPEED: 0.3");
+            AICompanionMod.LOGGER.info("[Attributes]   MAX_HEALTH: 120.0, ARMOR: 8.0, ARMOR_TOUGHNESS: 8.0, MOVEMENT_SPEED: 0.3");
         } else {
             AICompanionMod.LOGGER.error("[Attributes] AUTOMATON entity not present when EntityAttributeCreationEvent fired!");
         }

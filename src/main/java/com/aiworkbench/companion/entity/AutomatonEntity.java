@@ -3,6 +3,7 @@ package com.aiworkbench.companion.entity;
 import com.aiworkbench.companion.AICompanionMod;
 import com.aiworkbench.companion.ai.PerceptionEngine;
 import com.aiworkbench.companion.entity.goal.CompanionFollowGoal;
+import com.aiworkbench.companion.skill.SkillEngine;
 import com.aiworkbench.companion.entity.goal.CompanionWanderGoal;
 import com.aiworkbench.companion.entity.goal.JumpGoal;
 import net.minecraft.core.BlockPos;
@@ -36,9 +37,11 @@ import org.jetbrains.annotations.Nullable;
 import java.util.Optional;
 import java.util.UUID;
 
+import net.minecraft.world.SimpleMenuProvider;
 import net.minecraft.core.NonNullList;
+import com.aiworkbench.companion.inventory.CompanionContainer;
 
-public class AutomatonEntity extends PathfinderMob {
+public class AutomatonEntity extends PathfinderMob implements net.minecraft.world.MenuProvider {
     // ==================== Data Accessors ====================
 
     private static final EntityDataAccessor<String> DATA_CUSTOM_NAME =
@@ -66,6 +69,21 @@ public class AutomatonEntity extends PathfinderMob {
         SynchedEntityData.defineId(AutomatonEntity.class, EntityDataSerializers.INT);
     private static final EntityDataAccessor<Integer> DATA_XP =
         SynchedEntityData.defineId(AutomatonEntity.class, EntityDataSerializers.INT);
+    private static final EntityDataAccessor<Integer> DATA_XP_TO_NEXT =
+        SynchedEntityData.defineId(AutomatonEntity.class, EntityDataSerializers.INT);
+    private static final EntityDataAccessor<Integer> DATA_AVAILABLE_POINTS =
+        SynchedEntityData.defineId(AutomatonEntity.class, EntityDataSerializers.INT);
+
+    // ==================== Stat Allocation Fields ====================
+    private int strengthPoints = 0;   // 攻击力
+    private int vitalityPoints = 0;   // 生命值
+    private int speedPoints = 0;      // 移动速度
+    private int defensePoints = 0;    // 护甲
+    private static final int POINTS_PER_LEVEL = 3;
+    private static final int MAX_SPEED_POINTS = 30;
+    private static final int MAX_ATTACK_POINTS = 30;
+    private static final int MAX_VITALITY_POINTS = 30;
+    private static final int MAX_DEFENSE_POINTS = 30;
 
     // ==================== Fields ====================
 
@@ -134,6 +152,11 @@ public class AutomatonEntity extends PathfinderMob {
     private BlockPos patrolCenter = null;
     private static final float PATROL_RADIUS = 8.0f;
 
+    // ==================== Auto-Pickup Settings ====================
+    private boolean autoPickupEnabled = true;
+    private double pickupRadius = 5.0;
+    private boolean pickupOnlyValuable = false;
+
     // ==================== Inventory ====================
     private static final int INVENTORY_SIZE = 27;  // 3 rows x 9 columns
     private NonNullList<ItemStack> inventory = NonNullList.withSize(INVENTORY_SIZE, ItemStack.EMPTY);
@@ -146,6 +169,49 @@ public class AutomatonEntity extends PathfinderMob {
     private int aiSpontaneousCooldown = 0; // ticks until next AI idle speech
     private static final int AI_SPONTANEOUS_MIN = 2400; // 2 minutes minimum
     private static final int AI_SPONTANEOUS_MAX = 4800; // 4 minutes maximum
+
+    // ==================== Skill Engine ====================
+    private final SkillEngine skillEngine = new SkillEngine();
+    private volatile boolean skillActive = false;
+
+    // ==================== Valuable Items (Pickup Filter) ====================
+
+    private static final java.util.Set<net.minecraft.world.item.Item> VALUABLE_ITEMS = java.util.Set.of(
+        net.minecraft.world.item.Items.DIAMOND,
+        net.minecraft.world.item.Items.EMERALD,
+        net.minecraft.world.item.Items.GOLD_INGOT,
+        net.minecraft.world.item.Items.IRON_INGOT,
+        net.minecraft.world.item.Items.NETHERITE_SCRAP,
+        net.minecraft.world.item.Items.NETHERITE_INGOT,
+        net.minecraft.world.item.Items.ANCIENT_DEBRIS,
+        net.minecraft.world.item.Items.DIAMOND_BLOCK,
+        net.minecraft.world.item.Items.EMERALD_BLOCK,
+        net.minecraft.world.item.Items.GOLD_BLOCK,
+        net.minecraft.world.item.Items.IRON_BLOCK,
+        net.minecraft.world.item.Items.NETHERITE_BLOCK,
+        net.minecraft.world.item.Items.ENCHANTED_GOLDEN_APPLE,
+        net.minecraft.world.item.Items.GOLDEN_APPLE,
+        net.minecraft.world.item.Items.ENDER_PEARL,
+        net.minecraft.world.item.Items.ENDER_EYE,
+        net.minecraft.world.item.Items.BLAZE_ROD,
+        net.minecraft.world.item.Items.WITHER_SKELETON_SKULL,
+        net.minecraft.world.item.Items.TRIDENT,
+        net.minecraft.world.item.Items.TOTEM_OF_UNDYING,
+        net.minecraft.world.item.Items.ELYTRA,
+        net.minecraft.world.item.Items.NETHER_STAR,
+        net.minecraft.world.item.Items.HEART_OF_THE_SEA,
+        net.minecraft.world.item.Items.ECHO_SHARD,
+        net.minecraft.world.item.Items.AMETHYST_SHARD,
+        net.minecraft.world.item.Items.SPYGLASS,
+        net.minecraft.world.item.Items.RECOVERY_COMPASS,
+        net.minecraft.world.item.Items.MUSIC_DISC_5,
+        net.minecraft.world.item.Items.MUSIC_DISC_OTHERSIDE,
+        net.minecraft.world.item.Items.MUSIC_DISC_PIGSTEP
+    );
+
+    private static boolean isValuableItem(net.minecraft.world.item.Item item) {
+        return VALUABLE_ITEMS.contains(item);
+    }
 
     // ==================== Auto-Recall Fields ====================
     private static final double RECALL_DISTANCE_SQ = 1024.0; // 32^2 blocks
@@ -262,6 +328,8 @@ public class AutomatonEntity extends PathfinderMob {
         this.entityData.define(DATA_OWNER_UUID, Optional.empty());
         this.entityData.define(DATA_LEVEL, 1);
         this.entityData.define(DATA_XP, 0);
+        this.entityData.define(DATA_XP_TO_NEXT, 130); // 50 + 1*80
+        this.entityData.define(DATA_AVAILABLE_POINTS, 0);
     }
 
     // ==================== Attribute Supplier ====================
@@ -357,12 +425,20 @@ public class AutomatonEntity extends PathfinderMob {
             int deathXp = xp;
             int deathSkinType = this.entityData.get(DATA_SKIN_TYPE);
             String deathSkinValue = this.entityData.get(DATA_SKIN_VALUE);
+            int deathStr = strengthPoints, deathVit = vitalityPoints;
+            int deathSpd = speedPoints, deathDef = defensePoints;
+            int deathAvail = this.entityData.get(DATA_AVAILABLE_POINTS);
 
             // Find owner player before removing from manager
             String customName = this.getCustomName() != null ? this.getCustomName().getString() : "Companion";
             ServerPlayer owner = getOwner();
 
             dropInventoryItems();
+
+            // Shutdown AI brain to prevent memory leak
+            if (AICompanionMod.aiManager != null) {
+                AICompanionMod.aiManager.removeAI(this.getUUID());
+            }
 
             // Remove from manager so player can't interact with dead companion
             if (AICompanionMod.companionManager != null && ownerUUID != null) {
@@ -375,7 +451,8 @@ public class AutomatonEntity extends PathfinderMob {
                     "§c" + customName + " died! Respawning in 30 seconds..."));
             }
 
-            scheduleRespawn(deathCharId, deathLevel, deathXp, deathSkinType, deathSkinValue);
+            scheduleRespawn(deathCharId, deathLevel, deathXp, deathSkinType, deathSkinValue,
+                deathStr, deathVit, deathSpd, deathDef, deathAvail);
         }
         super.die(source);
     }
@@ -396,7 +473,8 @@ public class AutomatonEntity extends PathfinderMob {
     /**
      * Schedule a respawn task 30 seconds (600 ticks) later, preserving level/XP/skin.
      */
-    private void scheduleRespawn(String charId, int savedLevel, int savedXp, int savedSkinType, String savedSkinValue) {
+    private void scheduleRespawn(String charId, int savedLevel, int savedXp, int savedSkinType,
+            String savedSkinValue, int savedStr, int savedVit, int savedSpd, int savedDef, int savedAvail) {
         if (this.level().isClientSide || ownerUUID == null) return;
 
         UUID ownerUuid = ownerUUID;
@@ -406,6 +484,13 @@ public class AutomatonEntity extends PathfinderMob {
         server.tell(new net.minecraft.server.TickTask(
             server.getTickCount() + 600,
             () -> {
+                // 防止复活竞态：如果玩家在此期间重新登录并已有同伴，跳过
+                if (AICompanionMod.companionManager != null
+                        && AICompanionMod.companionManager.hasCompanion(ownerUuid)) {
+                    AICompanionMod.LOGGER.info("Player {} already has a companion, skipping scheduled respawn", ownerUuid);
+                    return;
+                }
+
                 // Find the player across all dimensions
                 ServerPlayer player = null;
                 ServerLevel targetLevel = null;
@@ -437,6 +522,13 @@ public class AutomatonEntity extends PathfinderMob {
                 if (savedXp > 0) {
                     newCompanion.grantXp(savedXp);
                 }
+                // Restore stat allocation
+                newCompanion.strengthPoints = savedStr;
+                newCompanion.vitalityPoints = savedVit;
+                newCompanion.speedPoints = savedSpd;
+                newCompanion.defensePoints = savedDef;
+                newCompanion.entityData.set(DATA_AVAILABLE_POINTS, savedAvail);
+                newCompanion.applyStatAllocation();
 
                 newCompanion.showDialogue("§a我回来了！", 80);
                 newCompanion.playSpawnParticles();
@@ -501,6 +593,11 @@ public class AutomatonEntity extends PathfinderMob {
             }
         }
 
+        // Skill Engine - takes priority over goal system when active
+        if (skillEngine.isActive()) {
+            skillEngine.tick(this);
+        }
+
         // Auto-defend: track and attack whoever hurt the owner recently
         if (autoDefendTicks > 0) {
             autoDefendTicks--;
@@ -540,6 +637,11 @@ public class AutomatonEntity extends PathfinderMob {
             pickupNearbyItems();
         }
 
+        // Memory summarizer tick every 1200 ticks (60 seconds)
+        if (tickCount % 1200 == 0 && AICompanionMod.memoryManager != null) {
+            AICompanionMod.memoryManager.tick();
+        }
+
         // Autonomous AI decision every 60 ticks (~3 seconds) - check surroundings
         if (tickCount % 60 == 0) {
             evaluateSituation();
@@ -564,15 +666,17 @@ public class AutomatonEntity extends PathfinderMob {
     }
 
     /**
-     * Scan for nearby item entities and pick them up into inventory
+     * Scan for nearby item entities and pick them up into inventory.
+     * Controlled by autoPickupEnabled, pickupRadius, and pickupOnlyValuable.
      */
     private void pickupNearbyItems() {
         if (this.level().isClientSide) return;
+        if (!autoPickupEnabled || !isAlive()) return;
 
-        double pickupRadius = 5.0; // Increased from 2.5
+        double radius = pickupRadius;
         net.minecraft.world.phys.AABB pickupBounds = new net.minecraft.world.phys.AABB(
-            this.getX() - pickupRadius, this.getY() - 1.0, this.getZ() - pickupRadius,
-            this.getX() + pickupRadius, this.getY() + 2.0, this.getZ() + pickupRadius
+            this.getX() - radius, this.getY() - 1.0, this.getZ() - radius,
+            this.getX() + radius, this.getY() + 2.0, this.getZ() + radius
         );
 
         // When not in follow mode, actively walk toward nearby items
@@ -600,11 +704,13 @@ public class AutomatonEntity extends PathfinderMob {
             }
         }
 
-        // Pick up items in range
+        // Pick up items in range (apply valuable filter if enabled)
         int picked = 0;
         for (net.minecraft.world.entity.item.ItemEntity item :
                 this.level().getEntitiesOfClass(net.minecraft.world.entity.item.ItemEntity.class, pickupBounds)) {
             if (item.isPickable() && item.isAlive() && item.tickCount > 10) {
+                // 贵重物品过滤
+                if (pickupOnlyValuable && !isValuableItem(item.getItem().getItem())) continue;
                 ItemStack stack = item.getItem();
                 if (addItemToInventory(stack)) {
                     item.discard();
@@ -826,15 +932,18 @@ public class AutomatonEntity extends PathfinderMob {
         // ==================== CRITICAL DANGERS (Immediate Warning, No Question) ====================
         if (perception.dangerLava) {
             showWarning("主人，小心岩浆！");
+            if (skillEngine.isActive()) skillEngine.cancelSkill(this);
             return;
         } else if (perception.dangerFall) {
             showWarning("注意脚下，别摔下去了！");
             return;
         } else if (perception.dangerHostile) {
             showWarning("有敌对生物在旁边！");
+            if (skillEngine.isActive()) skillEngine.cancelSkill(this);
             return;
         } else if (perception.dangerSuffocation) {
             showWarning("主人，这里会窒息！");
+            if (skillEngine.isActive()) skillEngine.cancelSkill(this);
             return;
         }
 
@@ -1039,28 +1148,77 @@ public class AutomatonEntity extends PathfinderMob {
             // Apply stat bonuses
             double baseHealth = 120.0;
             double newMaxHealth = baseHealth + (level - 1) * 2.0;
-            this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(newMaxHealth);
+            var healthAttr = this.getAttribute(Attributes.MAX_HEALTH);
+            if (healthAttr != null) healthAttr.setBaseValue(newMaxHealth);
             if (level % 5 == 0) {
                 double baseAttack = 4.0;
                 double newAttack = baseAttack + (level / 5) * 1.0;
-                this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(newAttack);
+                var atkAttr = this.getAttribute(Attributes.ATTACK_DAMAGE);
+                if (atkAttr != null) atkAttr.setBaseValue(newAttack);
             }
 
             this.entityData.set(DATA_LEVEL, level);
             this.entityData.set(DATA_XP, xp);
+            this.entityData.set(DATA_XP_TO_NEXT, xpToNext);
         }
+        // Load stat allocation
+        if (tag.contains("AvailablePoints")) {
+            this.entityData.set(DATA_AVAILABLE_POINTS, tag.getInt("AvailablePoints"));
+        }
+        if (tag.contains("StrengthPoints")) strengthPoints = tag.getInt("StrengthPoints");
+        if (tag.contains("VitalityPoints")) vitalityPoints = tag.getInt("VitalityPoints");
+        if (tag.contains("SpeedPoints")) speedPoints = tag.getInt("SpeedPoints");
+        if (tag.contains("DefensePoints")) defensePoints = tag.getInt("DefensePoints");
+
+        // Apply loaded stats (after all attributes are registered)
+        applyStatAllocation();
 
         // Load working mode
         if (tag.contains("WorkingMode")) {
             String mode = tag.getString("WorkingMode");
             this.entityData.set(DATA_WORKING_MODE, mode);
+            // Reset all mode flags, then set the active one
+            guardModeEnabled = false;
+            mineModeEnabled = false;
+            chopModeEnabled = false;
+            patrolModeEnabled = false;
+            followModeActive = false;
             switch (mode) {
-                case "guard" -> { guardModeEnabled = true; followModeActive = false; }
-                case "mine" -> { mineModeEnabled = true; followModeActive = false; }
-                case "chop" -> { chopModeEnabled = true; followModeActive = false; }
-                case "patrol" -> { patrolModeEnabled = true; followModeActive = false; }
-                default -> { followModeActive = true; }
+                case "guard" -> guardModeEnabled = true;
+                case "mine" -> mineModeEnabled = true;
+                case "chop" -> chopModeEnabled = true;
+                case "patrol" -> patrolModeEnabled = true;
+                default -> followModeActive = true;
             }
+        }
+
+        // Load explicit mode flags (override WorkingMode-derived values)
+        if (tag.contains("GuardMode")) guardModeEnabled = tag.getBoolean("GuardMode");
+        if (tag.contains("MineMode")) mineModeEnabled = tag.getBoolean("MineMode");
+        if (tag.contains("ChopMode")) chopModeEnabled = tag.getBoolean("ChopMode");
+        if (tag.contains("PatrolMode")) patrolModeEnabled = tag.getBoolean("PatrolMode");
+        if (tag.contains("FollowModeActive")) followModeActive = tag.getBoolean("FollowModeActive");
+
+        // Load persistent config state
+        if (tag.contains("Hidden")) hidden = tag.getBoolean("Hidden");
+        if (tag.contains("MovementStopped")) movementStopped = tag.getBoolean("MovementStopped");
+        if (tag.contains("AutoPickupEnabled")) autoPickupEnabled = tag.getBoolean("AutoPickupEnabled");
+        if (tag.contains("PickupRadius")) pickupRadius = tag.getDouble("PickupRadius");
+        if (tag.contains("PickupOnlyValuable")) pickupOnlyValuable = tag.getBoolean("PickupOnlyValuable");
+
+        // Load patrol center
+        if (tag.contains("PatrolCenter")) {
+            CompoundTag patrolTag = tag.getCompound("PatrolCenter");
+            patrolCenter = new BlockPos(
+                patrolTag.getInt("PX"),
+                patrolTag.getInt("PY"),
+                patrolTag.getInt("PZ")
+            );
+        }
+
+        // Apply hidden state
+        if (hidden) {
+            this.setInvisible(true);
         }
     }
 
@@ -1088,6 +1246,29 @@ public class AutomatonEntity extends PathfinderMob {
         // Save working mode
         tag.putString("WorkingMode", this.entityData.get(DATA_WORKING_MODE));
 
+        // Save mode flags explicitly (defensive against WorkingMode loss)
+        tag.putBoolean("GuardMode", guardModeEnabled);
+        tag.putBoolean("MineMode", mineModeEnabled);
+        tag.putBoolean("ChopMode", chopModeEnabled);
+        tag.putBoolean("PatrolMode", patrolModeEnabled);
+        tag.putBoolean("FollowModeActive", followModeActive);
+
+        // Save persistent config state
+        tag.putBoolean("Hidden", hidden);
+        tag.putBoolean("MovementStopped", movementStopped);
+        tag.putBoolean("AutoPickupEnabled", autoPickupEnabled);
+        tag.putDouble("PickupRadius", pickupRadius);
+        tag.putBoolean("PickupOnlyValuable", pickupOnlyValuable);
+
+        // Save patrol center
+        if (patrolCenter != null) {
+            CompoundTag patrolTag = new CompoundTag();
+            patrolTag.putInt("PX", patrolCenter.getX());
+            patrolTag.putInt("PY", patrolCenter.getY());
+            patrolTag.putInt("PZ", patrolCenter.getZ());
+            tag.put("PatrolCenter", patrolTag);
+        }
+
         // Save inventory
         ListTag inventoryTag = new ListTag();
         for (int i = 0; i < INVENTORY_SIZE; i++) {
@@ -1104,6 +1285,14 @@ public class AutomatonEntity extends PathfinderMob {
         // Save level & XP
         tag.putInt("CompanionLevel", level);
         tag.putInt("CompanionXP", xp);
+        tag.putInt("XpToNext", xpToNext);
+
+        // Save stat allocation
+        tag.putInt("AvailablePoints", this.entityData.get(DATA_AVAILABLE_POINTS));
+        tag.putInt("StrengthPoints", strengthPoints);
+        tag.putInt("VitalityPoints", vitalityPoints);
+        tag.putInt("SpeedPoints", speedPoints);
+        tag.putInt("DefensePoints", defensePoints);
     }
 
     // ==================== Getters and Setters ====================
@@ -1337,9 +1526,9 @@ public class AutomatonEntity extends PathfinderMob {
         ServerPlayer owner = getOwner();
         if (owner != null) {
             playTeleportSound();
-            double targetY = owner.getY() - 1;
+            // 从主人脚下一格向下扫描，找安全位置（避免窒息）
+            double targetY = findSafeYBelow(owner.level(), owner.blockPosition());
             if (!owner.level().dimension().equals(this.level().dimension())) {
-                // Cross-dimension teleport
                 ServerLevel targetLevel = (ServerLevel) owner.level();
                 this.teleportTo(targetLevel, owner.getX(), targetY, owner.getZ(),
                     java.util.Set.of(), owner.getYRot(), owner.getXRot());
@@ -1351,6 +1540,21 @@ public class AutomatonEntity extends PathfinderMob {
             showDialogue("下来了！", 40);
             AICompanionMod.LOGGER.info("[AutomatonEntity] Teleported down to {}", targetY);
         }
+    }
+
+    /**
+     * 从给定位置向下扫描，找到第一个安全落脚点（脚下两格都是空气或可穿过）。
+     * 最多向下扫描 10 格，找不到则返回原位置 -1。
+     */
+    private double findSafeYBelow(Level level, BlockPos ownerPos) {
+        for (int dy = 1; dy <= 10; dy++) {
+            BlockPos footPos = ownerPos.below(dy);
+            BlockPos headPos = footPos.above();
+            if (level.getBlockState(footPos).isAir() && level.getBlockState(headPos).isAir()) {
+                return footPos.getY() + 0.1;
+            }
+        }
+        return ownerPos.getY() - 1; // fallback
     }
 
     // ==================== Skin Management ====================
@@ -1614,8 +1818,8 @@ public class AutomatonEntity extends PathfinderMob {
         for (int i = 0; i < INVENTORY_SIZE; i++) {
             ItemStack slot = this.inventory.get(i);
             if (!slot.isEmpty() && slot.getCount() < slot.getMaxStackSize()) {
-                // Check if items are the same type (using builtInRegistryHolder comparison)
-                if (slot.getItem() == item.getItem() && slot.getDamageValue() == item.getDamageValue()) {
+                // Check if items are stackable (same item, damage, and NBT)
+                if (ItemStack.isSameItemSameTags(slot, item)) {
                     int spaceLeft = slot.getMaxStackSize() - slot.getCount();
                     int toAdd = Math.min(spaceLeft, item.getCount());
                     slot.grow(toAdd);
@@ -1657,6 +1861,21 @@ public class AutomatonEntity extends PathfinderMob {
         return this.entityData.get(DATA_WORKING_MODE);
     }
 
+    // ==================== MenuProvider 接口 ====================
+
+    @Override
+    public net.minecraft.network.chat.Component getDisplayName() {
+        return getCustomName() != null
+            ? getCustomName()
+            : net.minecraft.network.chat.Component.translatable("container.companion.inventory");
+    }
+
+    @Override
+    public net.minecraft.world.inventory.AbstractContainerMenu createMenu(int containerId,
+            net.minecraft.world.entity.player.Inventory playerInv, net.minecraft.world.entity.player.Player player) {
+        return new CompanionContainer(containerId, playerInv, this);
+    }
+
     /**
      * Get the mode data string based on current state (for mode transitions).
      */
@@ -1696,41 +1915,124 @@ public class AutomatonEntity extends PathfinderMob {
         // Sync to client
         this.entityData.set(DATA_LEVEL, level);
         this.entityData.set(DATA_XP, xp);
+        this.entityData.set(DATA_XP_TO_NEXT, xpToNext);
     }
 
     /**
-     * Trigger level-up effects and stat increases.
+     * Trigger level-up effects and grant stat points.
+     * Stats are no longer auto-applied; player allocates points manually.
      */
     private void onLevelUp() {
-        // Increase max health by 2 HP (1 heart) per level
-        double baseHealth = 120.0;
-        double newMaxHealth = baseHealth + (level - 1) * 2.0;
-        this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(newMaxHealth);
-        // Heal to full
-        this.setHealth((float) newMaxHealth);
-
-        // Increase attack damage every 5 levels
-        if (level % 5 == 0) {
-            double baseAttack = 4.0;
-            double newAttack = baseAttack + (level / 5) * 1.0;
-            this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(newAttack);
-        }
+        // Grant attribute points (player chooses where to spend)
+        int newPoints = level + POINTS_PER_LEVEL - 1; // cumulative: level 2 → 3 pts, level N → (N-1)*3
+        this.entityData.set(DATA_AVAILABLE_POINTS, (level - 1) * POINTS_PER_LEVEL);
 
         // Play sound and particles
         playLevelUpEffect();
 
         // Notify owner
-        String msg = "§6§l✦ 升级！同伴达到 Lv." + level + "！";
+        String msg = "§6§l✦ 升级！同伴达到 Lv." + level + "！ +" + POINTS_PER_LEVEL + "属性点";
         showDialogue(msg, 100);
 
         ServerPlayer owner = getOwner();
         if (owner != null) {
             owner.sendSystemMessage(net.minecraft.network.chat.Component.literal(
-                "§6§l✦ " + this.getCustomName().getString() + " 升级到 Lv." + level + "！"));
+                "§6§l✦ " + this.getCustomName().getString() + " 升级到 Lv." + level
+                + "！获得 " + POINTS_PER_LEVEL + " 属性点"));
+            owner.sendSystemMessage(net.minecraft.network.chat.Component.literal(
+                "§7使用 §f/companion stats add <属性> <点数> §7分配属性点"));
         }
 
-        AICompanionMod.LOGGER.info("[Level] Companion leveled up to {}! HP: {}/{}",
-            level, (int)this.getHealth(), (int)this.getMaxHealth());
+        AICompanionMod.LOGGER.info("[Level] Companion leveled up to {}! Available points: {}",
+            level, this.entityData.get(DATA_AVAILABLE_POINTS));
+    }
+
+    /**
+     * 应用属性点分配，重新计算所有属性基值。
+     * 在玩家分配点数后调用。
+     */
+    private void applyStatAllocation() {
+        double baseHealth = 120.0;
+        double baseAttack = 4.0;
+        double baseSpeed = 0.3;
+        double baseArmor = 8.0;
+
+        double newHealth = baseHealth + vitalityPoints * 2.0;
+        double newAttack = baseAttack + strengthPoints * 1.0 + (strengthPoints / 5) * 1.0;
+        double newSpeed = baseSpeed + speedPoints * 0.02;
+        double newArmor = baseArmor + defensePoints * 0.5;
+
+        var healthAttr = this.getAttribute(Attributes.MAX_HEALTH);
+        if (healthAttr != null) healthAttr.setBaseValue(newHealth);
+
+        var atkAttr = this.getAttribute(Attributes.ATTACK_DAMAGE);
+        if (atkAttr != null) atkAttr.setBaseValue(newAttack);
+
+        var speedAttr = this.getAttribute(Attributes.MOVEMENT_SPEED);
+        if (speedAttr != null) speedAttr.setBaseValue(newSpeed);
+
+        var armorAttr = this.getAttribute(Attributes.ARMOR);
+        if (armorAttr != null) armorAttr.setBaseValue(newArmor);
+
+        AICompanionMod.LOGGER.info("[Stats] Applied: HP={}, ATK={}, SPD={}, ARMOR={} | str={}, vit={}, spd={}, def={}",
+            (int)newHealth, String.format("%.1f", newAttack), String.format("%.2f", newSpeed),
+            String.format("%.1f", newArmor), strengthPoints, vitalityPoints, speedPoints, defensePoints);
+    }
+
+    /**
+     * 尝试分配属性点。成功返回 true，点数不足或达上限返回 false。
+     */
+    public boolean allocateStat(String stat, int points) {
+        if (points <= 0) return false;
+        int available = this.entityData.get(DATA_AVAILABLE_POINTS);
+        if (available < points) return false;
+
+        boolean allocated = false;
+        switch (stat) {
+            case "vitality", "vit", "体力" -> {
+                if (vitalityPoints + points > MAX_VITALITY_POINTS) return false;
+                vitalityPoints += points;
+                allocated = true;
+            }
+            case "strength", "str", "力量" -> {
+                if (strengthPoints + points > MAX_ATTACK_POINTS) return false;
+                strengthPoints += points;
+                allocated = true;
+            }
+            case "speed", "spd", "速度" -> {
+                if (speedPoints + points > MAX_SPEED_POINTS) return false;
+                speedPoints += points;
+                allocated = true;
+            }
+            case "defense", "def", "防御" -> {
+                if (defensePoints + points > MAX_DEFENSE_POINTS) return false;
+                defensePoints += points;
+                allocated = true;
+            }
+            default -> { return false; }
+        }
+
+        if (allocated) {
+            this.entityData.set(DATA_AVAILABLE_POINTS, available - points);
+            applyStatAllocation();
+        }
+        return allocated;
+    }
+
+    public int getAvailablePoints() { return this.entityData.get(DATA_AVAILABLE_POINTS); }
+    public int getStrengthPoints() { return strengthPoints; }
+    public int getVitalityPoints() { return vitalityPoints; }
+    public int getSpeedPoints() { return speedPoints; }
+    public int getDefensePoints() { return defensePoints; }
+
+    public void resetAllStats() {
+        strengthPoints = 0;
+        vitalityPoints = 0;
+        speedPoints = 0;
+        defensePoints = 0;
+        int totalLevels = (level - 1);
+        this.entityData.set(DATA_AVAILABLE_POINTS, totalLevels * POINTS_PER_LEVEL);
+        applyStatAllocation();
     }
 
     /**
@@ -1760,20 +2062,31 @@ public class AutomatonEntity extends PathfinderMob {
         this.xp = 0;
         this.xpToNext = 50 + level * 80;
 
-        // Apply stat bonuses
-        double baseHealth = 120.0;
-        double newMaxHealth = baseHealth + (level - 1) * 2.0;
-        this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(newMaxHealth);
-        if (level % 5 == 0) {
-            double baseAttack = 4.0;
-            double newAttack = baseAttack + (level / 5) * 1.0;
-            this.getAttribute(Attributes.ATTACK_DAMAGE).setBaseValue(newAttack);
-        }
-
+        // Grant accumulated points (player allocates manually)
+        int totalPoints = (level - 1) * POINTS_PER_LEVEL;
+        this.entityData.set(DATA_AVAILABLE_POINTS, totalPoints);
         this.entityData.set(DATA_LEVEL, level);
         this.entityData.set(DATA_XP, 0);
-        AICompanionMod.LOGGER.info("[Level] Companion level set to {} (admin)", level);
+        this.entityData.set(DATA_XP_TO_NEXT, xpToNext);
+
+        // Reset stats: give all points back as unallocated
+        strengthPoints = 0;
+        vitalityPoints = 0;
+        speedPoints = 0;
+        defensePoints = 0;
+        applyStatAllocation();
+
+        AICompanionMod.LOGGER.info("[Level] Companion level set to {} (admin), {} points available", level, totalPoints);
     }
+
+    // ==================== Auto-Pickup Getters/Setters ====================
+
+    public boolean isAutoPickupEnabled() { return autoPickupEnabled; }
+    public void setAutoPickupEnabled(boolean enabled) { this.autoPickupEnabled = enabled; }
+    public double getPickupRadius() { return pickupRadius; }
+    public void setPickupRadius(double radius) { this.pickupRadius = Math.max(1.0, Math.min(16.0, radius)); }
+    public boolean isPickupOnlyValuable() { return pickupOnlyValuable; }
+    public void setPickupOnlyValuable(boolean valuable) { this.pickupOnlyValuable = valuable; }
 
     // ==================== Auto-Recall System ====================
 
@@ -1851,6 +2164,20 @@ public class AutomatonEntity extends PathfinderMob {
         if (AICompanionMod.companionManager != null) {
             AICompanionMod.companionManager.addCompanion(ownerUUID, this);
         }
+    }
+
+    // ==================== Skill Engine ====================
+
+    public SkillEngine getSkillEngine() {
+        return skillEngine;
+    }
+
+    public boolean isSkillActive() {
+        return skillActive;
+    }
+
+    public void setSkillActive(boolean active) {
+        this.skillActive = active;
     }
 
     /**

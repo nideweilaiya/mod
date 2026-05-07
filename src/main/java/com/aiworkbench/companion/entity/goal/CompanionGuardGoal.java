@@ -36,6 +36,7 @@ public class CompanionGuardGoal extends Goal {
 
     @Override
     public boolean canUse() {
+        if (companion.isSkillActive()) return false;
         // Only active when guard mode is enabled and we have an owner
         if (!companion.isGuardModeEnabled()) {
             return false;
@@ -164,17 +165,19 @@ public class CompanionGuardGoal extends Goal {
     }
 
     /**
-     * Get the owner player
+     * Get the owner player (searches all dimensions)
      */
     @Nullable
     private Player getOwner() {
         if (companion.getOwnerUUID() == null || companion.getServer() == null) {
             return null;
         }
-        // Use companion's current dimension instead of always OVERWORLD
-        ServerLevel ownerLevel = companion.getServer().getLevel(companion.level().dimension());
-        if (ownerLevel == null) return null;
-        return ownerLevel.getPlayerByUUID(companion.getOwnerUUID());
+        // Search all dimensions for the owner
+        for (ServerLevel sl : companion.getServer().getAllLevels()) {
+            Player p = sl.getPlayerByUUID(companion.getOwnerUUID());
+            if (p != null) return p;
+        }
+        return null;
     }
 
     /**

@@ -8,6 +8,8 @@
   "key.aicompanion.follow_cancel": "取消任务并跟随",
   "key.aicompanion.toggle_hud": "切换同伴 HUD",
   "key.aicompanion.control_menu": "打开控制菜单",
+  "key.aicompanion.skill_screen": "打开技能库",
+  "key.aicompanion.chat_mode": "切换聊天模式（直接与同伴对话）",
   "gui.aicompanion.title": "AI 同伴",
   "gui.aicompanion.loading": "加载中...",
   "gui.aicompanion.no_companions": "没有可用的同伴",

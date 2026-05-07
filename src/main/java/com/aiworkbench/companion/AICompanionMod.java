@@ -11,8 +11,16 @@ import com.aiworkbench.companion.manager.CharacterManager;
 import com.aiworkbench.companion.network.CompanionTCPServer;
 import com.aiworkbench.companion.network.BridgeClient;
 import com.aiworkbench.companion.ai.AIManager;
+import com.aiworkbench.companion.memory.CompanionMemoryManager;
+import com.aiworkbench.companion.skill.PresetSkillRegistry;
+import com.aiworkbench.companion.inventory.CompanionContainer;
+import com.aiworkbench.companion.skill.SkillLibrary;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.world.inventory.MenuType;
 import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.common.extensions.IForgeMenuType;
+import net.minecraftforge.registries.DeferredRegister;
+import net.minecraftforge.registries.ForgeRegistries;
 import net.minecraftforge.event.RegisterCommandsEvent;
 import net.minecraftforge.event.server.ServerStartingEvent;
 import net.minecraftforge.event.server.ServerStoppingEvent;
@@ -37,15 +45,34 @@ public class AICompanionMod {
     public static CompanionTCPServer tcpServer;
     public static BridgeClient bridgeClient;
     public static AIManager aiManager;
+    public static SkillLibrary skillLibrary;
+    public static CompanionMemoryManager memoryManager;
+
+    // MenuType registration
+    public static final DeferredRegister<MenuType<?>> MENU_TYPES =
+        DeferredRegister.create(ForgeRegistries.MENU_TYPES, MODID);
+
+    @SuppressWarnings("null")
+    public static final java.util.function.Supplier<MenuType<CompanionContainer>> COMPANION_CONTAINER =
+        MENU_TYPES.register("companion_container",
+            () -> IForgeMenuType.create((containerId, inv, data) -> {
+                // data 中有 companion 的 entityId（由 openMenu 自动写入）
+                int entityId = data.readInt();
+                net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+                if (mc.level == null) return new CompanionContainer(containerId, inv, null);
+                net.minecraft.world.entity.Entity entity = mc.level.getEntity(entityId);
+                if (entity instanceof com.aiworkbench.companion.entity.AutomatonEntity companion) {
+                    return new CompanionContainer(containerId, inv, companion);
+                }
+                return new CompanionContainer(containerId, inv, null);
+            }));
 
     public AICompanionMod() {
-        // Register entity types on the MOD bus during the CONSTRUCT phase.
-        // DeferredRegister.register() queues callbacks that fire during MOD CONSTRUCT,
-        // before FMLCommonSetupEvent and before EntityAttributeCreationEvent.
-        // Entity attributes are then registered via EntityAttributeCreationEvent in EntityAttributeEvents.
+        // Register entity types, items, creative tab, and menu types on the MOD bus
         EntityInit.register(FMLJavaModLoadingContext.get().getModEventBus());
         ItemInit.register(FMLJavaModLoadingContext.get().getModEventBus());
         ModCreativeTab.register(FMLJavaModLoadingContext.get().getModEventBus());
+        MENU_TYPES.register(FMLJavaModLoadingContext.get().getModEventBus());
 
         FMLJavaModLoadingContext.get().getModEventBus().addListener(this::commonSetup);
         FMLJavaModLoadingContext.get().getModEventBus().addListener(this::clientSetup);
@@ -91,6 +118,11 @@ public class AICompanionMod {
         LOGGER.info("[Setup] Initializing AIManager...");
         aiManager = new AIManager();
         LOGGER.info("[Setup] AI Manager ready");
+
+        LOGGER.info("[Setup] Initializing SkillLibrary...");
+        skillLibrary = new SkillLibrary();
+        PresetSkillRegistry.registerAll(skillLibrary);
+        LOGGER.info("[Setup] SkillLibrary initialized with presets");
     }
 
     private void clientSetup(final FMLClientSetupEvent event) {
@@ -113,6 +145,12 @@ public class AICompanionMod {
         CompanionConfig.load(server);
         LOGGER.info("[Server] Companion config loaded");
 
+        // Initialize skill library with world directory for JSON persistence
+        if (skillLibrary != null) {
+            skillLibrary.setWorldDirectory(server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT).toFile());
+            LOGGER.info("[Server] SkillLibrary world directory set");
+        }
+
         // Start TCP server for Python communication
         tcpServer = new CompanionTCPServer();
         tcpServer.start();
@@ -122,6 +160,11 @@ public class AICompanionMod {
         bridgeClient = new BridgeClient();
         bridgeClient.start();
         LOGGER.info("[Server] Bridge Client started, connecting to Python on port 8767");
+
+        // Initialize Memory Manager
+        memoryManager = new CompanionMemoryManager(
+            server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT));
+        LOGGER.info("[Server] Memory Manager initialized");
     }
 
     @SubscribeEvent
@@ -143,6 +186,13 @@ public class AICompanionMod {
         if (server != null) {
             CompanionConfig.save(server);
             LOGGER.info("[Server] Companion config saved");
+        }
+
+        // Close memory manager
+        if (memoryManager != null) {
+            memoryManager.close();
+            memoryManager = null;
+            LOGGER.info("[Server] Memory Manager closed");
         }
     }
 

@@ -28,6 +28,9 @@ public class CompanionAI {
     private final ExecutorService executor = Executors.newCachedThreadPool();
     private final Gson gson = new GsonBuilder().create();
 
+    // Regex for stripping <think> tags from LLM output (qwen3.5)
+    private static final String THINK_STRIP_REGEX = "<think>[\\s\\S]*?</think>";
+
     // Context for this companion
     private final String companionId;
     private final String ownerName;
@@ -39,6 +42,35 @@ public class CompanionAI {
         + "你性格开朗、乐于助人，说话简洁活泼，偶尔会开个小玩笑。"
         + "你喜欢夸赞主人，也喜欢分享你对这个方块世界的发现。"
         + "每次回复控制在20字以内，用中文，不要用表情符号。";
+
+    // Skill list that the AI can invoke
+    private static final String SKILL_INSTRUCTIONS =
+        "=== 技能执行规则 ===\n"
+        + "当主人要求你执行任务时，你必须在回复中恰带 [SKILL:技能名] 标记。\n"
+        + "可用技能列表：\n"
+        + "- collectWood: 砍树收集木材\n"
+        + "- mineStone: 挖掘石头\n"
+        + "- mineCoalOre: 挖掘煤矿\n"
+        + "- mineIronOre: 挖掘铁矿\n"
+        + "- fightZombie: 攻击附近的僵尸\n"
+        + "- collectDrops: 收集周围掉落物\n"
+        + "- craftStick: 合成木棍\n"
+        + "- craftWoodenPickaxe: 合成木镐\n"
+        + "- craftFurnace: 合成熔炉\n"
+        + "- buildShelter: 建造庇护所\n"
+        + "- smeltIronIngot: 冶炼铁锭\n"
+        + "- lookAtOwner: 看向主人\n"
+        + "- moveForward: 向前移动\n"
+        + "\n重要规则：\n"
+        + "1. 任何任务/行动请求 → 必须输出 [SKILL:技能名]\n"
+        + "2. 纯聊天/问问题 → 正常中文回复，不要加 [SKILL:]\n"
+        + "3. [SKILL:xxx] 后面不要加任何文字\n"
+        + "4. 技能名区分大小写：是 mineIronOre 不是 MineIronOre\n"
+        + "5. 如果没有匹配的技能，回复\"我还不会做这个呢\"\n"
+        + "6. 如需创建新技能，用 [GENERATE:简短描述]\n"
+        + "\n示例：\n"
+        + "主人：挖点铁矿 → 好的！[SKILL:mineIronOre]\n"
+        + "主人：你好 → 主人好呀！今天天气不错~";
 
     public CompanionAI(String companionId, String ownerName) {
         this.companionId = companionId;
@@ -78,6 +110,11 @@ public class CompanionAI {
     public CompletableFuture<String> sendMessage(String playerMessage) {
         return CompletableFuture.supplyAsync(() -> {
             try {
+                // Log to L2 memory
+                if (AICompanionMod.memoryManager != null) {
+                    AICompanionMod.memoryManager.logConversation(companionId, "player", playerMessage);
+                }
+
                 // Add player message to history
                 conversationHistory.add(new ChatMessage("user", playerMessage));
 
@@ -90,9 +127,19 @@ public class CompanionAI {
                 // Add AI response to history
                 conversationHistory.add(new ChatMessage("assistant", response));
 
+                // Log AI response to L2 memory
+                if (AICompanionMod.memoryManager != null) {
+                    AICompanionMod.memoryManager.logConversation(companionId, "companion", response);
+                }
+
                 // Keep history manageable
                 while (conversationHistory.size() > 20) {
                     conversationHistory.remove(0);
+                }
+
+                // Update relationship score (L3)
+                if (AICompanionMod.memoryManager != null) {
+                    AICompanionMod.memoryManager.addRelationshipScore(companionId, 1);
                 }
 
                 return response;
@@ -163,10 +210,18 @@ public class CompanionAI {
         // Build messages for chat API
         List<Map<String, String>> messages = new ArrayList<>();
 
-        // System message with personality and context
+        // System message with personality, skills, context, and memory
+        String memoryCtx = "";
+        if (AICompanionMod.memoryManager != null) {
+            memoryCtx = AICompanionMod.memoryManager.getMemoryContext(companionId);
+        }
         String systemMsg = PERSONALITY + "\n"
             + "你的主人是 " + ownerName + "。\n"
-            + "当前情境：" + formatContext() + "\n"
+            + "当前情境：" + formatContext() + "\n";
+        if (!memoryCtx.isEmpty()) {
+            systemMsg += "\n==== 你的记忆 ====\n" + memoryCtx + "\n";
+        }
+        systemMsg += "\n" + SKILL_INSTRUCTIONS + "\n"
             + "请直接回复，不要输出思考过程。";
         messages.add(Map.of("role", "system", "content", systemMsg));
 
@@ -249,8 +304,8 @@ public class CompanionAI {
                     if (think instanceof String) {
                         thinking = ((String) think).trim();
                         AICompanionMod.LOGGER.info("[CompanionAI] thinking field length: " + thinking.length());
-                        // Strip think tags:<think>...</think>  and <think>...</think>
-                        thinking = thinking.replaceAll("<think>[\\s\\S]*?</think>", "").trim();
+                        // Strip think tags from qwen3.5 output
+                        thinking = thinking.replaceAll(THINK_STRIP_REGEX, "").trim();
                         if (!thinking.isEmpty()) {
                             response = thinking;
                             AICompanionMod.LOGGER.info("[CompanionAI] Using thinking as response");
@@ -290,9 +345,11 @@ public class CompanionAI {
             }
         }
 
-        // Strip ALL think tags:<think>...</think> and <think>...</think>
-        response = response.replaceAll("<think>[\\s\\S]*?</think>", "").replaceAll("<think>[\\s\\S]*?</think>", "").replaceAll("<think>.*", "").replaceAll("<think>.*", "").trim();
-        thinking = thinking.replaceAll("<think>[\\s\\S]*?</think>", "").replaceAll("<think>[\\s\\S]*?</think>", "").replaceAll("<think>.*", "").replaceAll("<think>.*", "").trim();
+        // Strip think tags from qwen3.5 output
+        response = response.replaceAll(THINK_STRIP_REGEX, "").trim();
+        if (thinking != null) {
+            thinking = thinking.replaceAll(THINK_STRIP_REGEX, "").trim();
+        }
 
         AICompanionMod.LOGGER.info("[CompanionAI] After strip, response length=" + response.length() + ", thinking length=" + thinking.length());
 

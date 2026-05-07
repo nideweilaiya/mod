@@ -51,6 +51,7 @@ public class CompanionMineGoal extends Goal {
 
     @Override
     public boolean canUse() {
+        if (companion.isSkillActive()) return false;
         // Only active when mine mode is enabled
         if (!companion.isMineModeEnabled()) {
             return false;

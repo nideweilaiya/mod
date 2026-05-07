@@ -36,7 +36,31 @@ public class CompanionLifecycleCommands {
                         .executes(ctx -> showLevel(ctx.getSource())))
                 .then(Commands.literal("name")
                         .then(Commands.argument("name", StringArgumentType.greedyString())
-                                .executes(ctx -> setName(ctx.getSource(), StringArgumentType.getString(ctx, "name")))));
+                                .executes(ctx -> setName(ctx.getSource(), StringArgumentType.getString(ctx, "name")))))
+                // Pickup commands
+                .then(Commands.literal("pickup")
+                        .executes(ctx -> togglePickup(ctx.getSource()))
+                        .then(Commands.literal("on")
+                                .executes(ctx -> setPickup(ctx.getSource(), true)))
+                        .then(Commands.literal("off")
+                                .executes(ctx -> setPickup(ctx.getSource(), false)))
+                        .then(Commands.literal("range")
+                                .then(Commands.argument("range", IntegerArgumentType.integer(1, 16))
+                                        .executes(ctx -> setPickupRange(ctx.getSource(),
+                                                IntegerArgumentType.getInteger(ctx, "range")))))
+                        .then(Commands.literal("valuable")
+                                .executes(ctx -> toggleValuable(ctx.getSource()))))
+                // Stats commands
+                .then(Commands.literal("stats")
+                        .executes(ctx -> showStats(ctx.getSource()))
+                        .then(Commands.literal("add")
+                                .then(Commands.argument("stat", StringArgumentType.word())
+                                        .then(Commands.argument("points", IntegerArgumentType.integer(1, 30))
+                                                .executes(ctx -> addStats(ctx.getSource(),
+                                                    StringArgumentType.getString(ctx, "stat"),
+                                                    IntegerArgumentType.getInteger(ctx, "points"))))))
+                        .then(Commands.literal("reset")
+                                .executes(ctx -> resetStats(ctx.getSource()))));
     }
 
     /**
@@ -73,6 +97,13 @@ public class CompanionLifecycleCommands {
         source.sendSuccess(() -> Component.literal("Mine: " + (companion.isMineModeEnabled() ? "ON" : "OFF")), false);
         source.sendSuccess(() -> Component.literal("Chop: " + (companion.isChopModeEnabled() ? "ON" : "OFF")), false);
         source.sendSuccess(() -> Component.literal("HP: " + (int)companion.getHealth() + "/" + (int)companion.getMaxHealth()), false);
+        // 技能状态
+        if (companion.isSkillActive()) {
+            source.sendSuccess(() -> Component.literal("§b技能: §e" + companion.getSkillEngine().getCurrentSkillName()
+                    + " §7[" + companion.getSkillEngine().getCurrentStepDescription() + "]"), false);
+        } else {
+            source.sendSuccess(() -> Component.literal("§b技能: §7无"), false);
+        }
         // 显示装备
         source.sendSuccess(() -> Component.literal("§6装备:"), false);
         net.minecraft.world.entity.EquipmentSlot[] equipSlots = {
@@ -302,6 +333,125 @@ public class CompanionLifecycleCommands {
 
         companion.teleportDown();
         source.sendSuccess(() -> Component.literal("§b[下方] Companion going down!"), true);
+        return 1;
+    }
+
+    // ==================== Pickup Commands ====================
+
+    private static int togglePickup(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) return 0;
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("你没有同伴"));
+            return 0;
+        }
+        boolean on = !companion.isAutoPickupEnabled();
+        companion.setAutoPickupEnabled(on);
+        source.sendSuccess(() -> Component.literal(on ? "§a自动拾取: 开启" : "§7自动拾取: 关闭"), false);
+        return 1;
+    }
+
+    private static int setPickup(CommandSourceStack source, boolean enabled) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) return 0;
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("你没有同伴"));
+            return 0;
+        }
+        companion.setAutoPickupEnabled(enabled);
+        source.sendSuccess(() -> Component.literal(enabled ? "§a自动拾取: 开启" : "§7自动拾取: 关闭"), false);
+        return 1;
+    }
+
+    private static int setPickupRange(CommandSourceStack source, int range) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) return 0;
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("你没有同伴"));
+            return 0;
+        }
+        companion.setPickupRadius(range);
+        source.sendSuccess(() -> Component.literal("§a拾取范围: " + range + " 格"), false);
+        return 1;
+    }
+
+    private static int toggleValuable(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) return 0;
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("你没有同伴"));
+            return 0;
+        }
+        boolean valuable = !companion.isPickupOnlyValuable();
+        companion.setPickupOnlyValuable(valuable);
+        source.sendSuccess(() -> Component.literal(valuable ? "§e贵重模式: 仅拾取贵重物品" : "§a全部模式: 拾取所有物品"), false);
+        return 1;
+    }
+
+    // ==================== Stats Commands ====================
+
+    private static int showStats(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) return 0;
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("你没有同伴"));
+            return 0;
+        }
+        int avail = companion.getAvailablePoints();
+        source.sendSuccess(() -> Component.literal("§6=== 同伴属性 ==="), false);
+        source.sendSuccess(() -> Component.literal("§e等级: §f" + companion.getLevel()
+            + "  §e可用点数: §a" + avail), false);
+        source.sendSuccess(() -> Component.literal("§c体力: §f+" + companion.getVitalityPoints()
+            + "  §b力量: §f+" + companion.getStrengthPoints()
+            + "  §a速度: §f+" + companion.getSpeedPoints()
+            + "  §7防御: §f+" + companion.getDefensePoints()), false);
+        source.sendSuccess(() -> Component.literal("§7使用 §f/companion stats add <体力|力量|速度|防御> <点数> §7加点"), false);
+        if (avail > 0) {
+            source.sendSuccess(() -> Component.literal("§e你有 " + avail + " 点可用属性点！"), false);
+        }
+        return 1;
+    }
+
+    private static int addStats(CommandSourceStack source, String stat, int points) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) return 0;
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("你没有同伴"));
+            return 0;
+        }
+        boolean ok = companion.allocateStat(stat.toLowerCase(), points);
+        if (ok) {
+            String displayName = switch (stat.toLowerCase()) {
+                case "vitality", "vit", "体力" -> "体力";
+                case "strength", "str", "力量" -> "力量";
+                case "speed", "spd", "速度" -> "速度";
+                case "defense", "def", "防御" -> "防御";
+                default -> stat;
+            };
+            source.sendSuccess(() -> Component.literal("§a✅ " + displayName + " +" + points
+                + " (" + companion.getAvailablePoints() + " 点剩余)"), false);
+        } else {
+            source.sendFailure(Component.literal("§c分配失败: 点数不足或已达上限"));
+        }
+        return 1;
+    }
+
+    private static int resetStats(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) return 0;
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("你没有同伴"));
+            return 0;
+        }
+        companion.resetAllStats();
+        source.sendSuccess(() -> Component.literal("§e属性点已重置，所有点数已返还"), false);
         return 1;
     }
 }

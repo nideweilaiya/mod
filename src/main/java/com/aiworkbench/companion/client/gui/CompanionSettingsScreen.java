@@ -193,9 +193,79 @@ public class CompanionSettingsScreen extends Screen {
                 .bounds(cx - 60, mdy + 24, 160, 14).build());
         }
 
+        // ===== 属性加点区域 =====
+        int stY = mdy + 52;
+        if (companion != null) {
+            int avail = companion.getAvailablePoints();
+            addRenderableWidget(Button.builder(
+                Component.literal("§6§l属性加点  §e可用点数: §a" + avail), btn -> {})
+                .bounds(cx - 120, stY, 240, 14).build());
+
+            // 体力
+            int r1 = stY + 18;
+            addStatRow("§c体力", "vitality", companion.getVitalityPoints(), r1, cx);
+            // 力量
+            int r2 = r1 + 22;
+            addStatRow("§b力量", "strength", companion.getStrengthPoints(), r2, cx);
+            // 速度
+            int r3 = r2 + 22;
+            addStatRow("§a速度", "speed", companion.getSpeedPoints(), r3, cx);
+            // 防御
+            int r4 = r3 + 22;
+            addStatRow("§7防御", "defense", companion.getDefensePoints(), r4, cx);
+
+            // 重置按钮
+            addRenderableWidget(Button.builder(Component.literal("§e重置全部"), btn -> {
+                sendCmd("companion stats reset");
+                statusMessage = "§e属性已重置";
+            }).bounds(cx - 40, r4 + 26, 80, 16).build());
+        }
+
+        // ===== 拾取控制区域 =====
+        int pkY = stY + 136;
+        addRenderableWidget(Button.builder(Component.literal("§6§l拾取设置"), btn -> {}).bounds(cx - 60, pkY, 120, 14).build());
+
+        addRenderableWidget(Button.builder(Component.literal(companion != null && companion.isAutoPickupEnabled() ? "§a拾取: ON" : "§7拾取: OFF"),
+            btn -> sendCmd("companion pickup")).bounds(cx - 120, pkY + 18, 75, 18).build());
+        addRenderableWidget(Button.builder(Component.literal(companion != null && companion.isPickupOnlyValuable() ? "§e贵重模式" : "§7全物品"),
+            btn -> sendCmd("companion pickup valuable")).bounds(cx - 42, pkY + 18, 75, 18).build());
+        addRenderableWidget(Button.builder(Component.literal("§b范围+"), btn -> sendCmd("companion pickup range 10"))
+            .bounds(cx + 36, pkY + 18, 50, 18).build());
+        addRenderableWidget(Button.builder(Component.literal("§7范围-"), btn -> sendCmd("companion pickup range 3"))
+            .bounds(cx + 88, pkY + 18, 35, 18).build());
+
+        // ===== 技能快捷操作 =====
+        int skY = pkY + 48;
+        addRenderableWidget(Button.builder(Component.literal("§6§l技能学习"), btn -> {}).bounds(cx - 60, skY, 120, 14).build());
+
+        addRenderableWidget(Button.builder(Component.literal("§7挖矿"), btn -> sendCmd("companion chat 挖点铁矿"))
+            .bounds(cx - 120, skY + 18, 55, 18).build());
+        addRenderableWidget(Button.builder(Component.literal("§6砍树"), btn -> sendCmd("companion chat 砍树"))
+            .bounds(cx - 60, skY + 18, 55, 18).build());
+        addRenderableWidget(Button.builder(Component.literal("§e合成"), btn -> sendCmd("companion chat 合成木棍"))
+            .bounds(cx, skY + 18, 55, 18).build());
+        addRenderableWidget(Button.builder(Component.literal("§a收集"), btn -> sendCmd("companion chat 收集掉落"))
+            .bounds(cx + 60, skY + 18, 55, 18).build());
+        addRenderableWidget(Button.builder(Component.literal("§d技能库"), btn -> sendCmd("companion skill list"))
+            .bounds(cx - 40, skY + 40, 80, 18).build());
+
         // ===== Close =====
         addRenderableWidget(Button.builder(Component.literal("§c关闭"), btn -> onClose())
-            .bounds(cx - 30, mdy + 50, 60, 18).build());
+            .bounds(cx - 30, skY + 70, 60, 18).build());
+    }
+
+    private void addStatRow(String label, String stat, int currentPoints, int y, int cx) {
+        addRenderableWidget(Button.builder(Component.literal(label + " +" + currentPoints), btn -> {})
+            .bounds(cx - 120, y, 70, 18).build());
+        addRenderableWidget(Button.builder(Component.literal("+1"), btn -> {
+            sendCmd("companion stats add " + stat + " 1");
+        }).bounds(cx - 45, y, 30, 18).build());
+        addRenderableWidget(Button.builder(Component.literal("+5"), btn -> {
+            sendCmd("companion stats add " + stat + " 5");
+        }).bounds(cx - 10, y, 30, 18).build());
+        addRenderableWidget(Button.builder(Component.literal("+10"), btn -> {
+            sendCmd("companion stats add " + stat + " 10");
+        }).bounds(cx + 25, y, 35, 18).build());
     }
 
     @Override

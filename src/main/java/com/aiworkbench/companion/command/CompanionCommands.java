@@ -2,6 +2,7 @@ package com.aiworkbench.companion.command;
 
 import com.aiworkbench.companion.AICompanionMod;
 import com.aiworkbench.companion.entity.AutomatonEntity;
+import com.aiworkbench.companion.inventory.CompanionContainer;
 import com.aiworkbench.companion.skill.SkillCommand;
 import com.mojang.brigadier.CommandDispatcher;
 import net.minecraft.commands.CommandSourceStack;
@@ -58,7 +59,7 @@ public class CompanionCommands {
     private static int sendControlMenu(CommandSourceStack source) {
         ServerPlayer player = source.getPlayer();
         if (player == null) {
-            source.sendFailure(Component.literal("Must be used by a player"));
+            source.sendFailure(Component.literal("必须由玩家执行"));
             return 0;
         }
 
@@ -103,7 +104,7 @@ public class CompanionCommands {
     private static int openCompanionInventory(CommandSourceStack source) {
         ServerPlayer player = source.getPlayer();
         if (player == null) {
-            source.sendFailure(Component.literal("Must be used by a player"));
+            source.sendFailure(Component.literal("必须由玩家执行"));
             return 0;
         }
 
@@ -113,6 +114,7 @@ public class CompanionCommands {
             return 0;
         }
 
+        CompanionContainer.setPendingCompanion(player.getUUID(), companion);
         player.openMenu(companion);
         return 1;
     }

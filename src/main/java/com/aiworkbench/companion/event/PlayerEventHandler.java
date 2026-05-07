@@ -160,6 +160,8 @@ public class PlayerEventHandler {
 
                 // 潜行+右键 → 打开同伴背包 Container
                 if (player.isShiftKeyDown()) {
+                    com.aiworkbench.companion.inventory.CompanionContainer.setPendingCompanion(
+                        player.getUUID(), companion);
                     player.openMenu(companion);
                 }
 
@@ -464,7 +466,7 @@ public class PlayerEventHandler {
     @javax.annotation.Nullable
     private AutomatonEntity loadCompanionFromPlayerNBT(ServerPlayer player) {
         CompoundTag data = player.getPersistentData();
-        if (!data.contains(TAG_COMPANION_UUID) || !data.contains(TAG_COMPANION_UUID_LSB)) {
+        if (!data.hasUUID(TAG_COMPANION_UUID)) {
             return null;
         }
         if (!data.contains(TAG_COMPANION_DIM)) return null;

@@ -30,13 +30,13 @@ public class CompanionSkinCommands {
     private static int setSkin(CommandSourceStack source, String skinName) {
         ServerPlayer player = source.getPlayer();
         if (player == null) {
-            source.sendFailure(Component.literal("Must be used by a player"));
+            source.sendFailure(Component.literal("必须由玩家执行"));
             return 0;
         }
 
         AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
         if (companion == null || !companion.isAlive()) {
-            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            source.sendFailure(Component.literal("你没有同伴"));
             return 0;
         }
 
@@ -46,30 +46,30 @@ public class CompanionSkinCommands {
         File skinFile = new File(skinsDir, skinName + ".png");
 
         if (!skinFile.exists()) {
-            source.sendFailure(Component.literal("Skin not found: " + skinName + ".png in aicompanion/skins/"));
+            source.sendFailure(Component.literal("皮肤未找到: " + skinName + ".png"));
             return 0;
         }
 
         companion.setSkinFromUrl(skinName);
-        source.sendSuccess(() -> Component.literal("Companion skin set to: " + skinName), true);
+        source.sendSuccess(() -> Component.literal("同伴皮肤设置为: " + skinName), true);
         return 1;
     }
 
     private static int setDefaultSkin(CommandSourceStack source) {
         ServerPlayer player = source.getPlayer();
         if (player == null) {
-            source.sendFailure(Component.literal("Must be used by a player"));
+            source.sendFailure(Component.literal("必须由玩家执行"));
             return 0;
         }
 
         AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
         if (companion == null || !companion.isAlive()) {
-            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            source.sendFailure(Component.literal("你没有同伴"));
             return 0;
         }
 
         companion.setDefaultSkin();
-        source.sendSuccess(() -> Component.literal("Companion skin reset to default"), true);
+        source.sendSuccess(() -> Component.literal("同伴皮肤已恢复默认"), true);
         return 1;
     }
 
@@ -77,20 +77,20 @@ public class CompanionSkinCommands {
         File worldDir = source.getServer().getWorldPath(LevelResource.ROOT).toFile();
         File skinsDir = new File(worldDir, "aicompanion/skins");
 
-        source.sendSuccess(() -> Component.literal("Checking path: " + worldDir.getAbsolutePath()), false);
+        source.sendSuccess(() -> Component.literal("检查路径: " + worldDir.getAbsolutePath()), false);
 
         if (!skinsDir.exists() || !skinsDir.isDirectory()) {
-            source.sendSuccess(() -> Component.literal("No skins folder at: " + skinsDir.getAbsolutePath()), false);
+            source.sendSuccess(() -> Component.literal("皮肤文件夹不存在: " + skinsDir.getAbsolutePath()), false);
             return 0;
         }
 
         File[] files = skinsDir.listFiles((dir, name) -> name.endsWith(".png"));
         if (files == null || files.length == 0) {
-            source.sendSuccess(() -> Component.literal("No skins found in aicompanion/skins/"), false);
+            source.sendSuccess(() -> Component.literal("皮肤文件夹为空"), false);
             return 0;
         }
 
-        source.sendSuccess(() -> Component.literal("Available skins:"), false);
+        source.sendSuccess(() -> Component.literal("可用皮肤:"), false);
         for (File f : files) {
             source.sendSuccess(() -> Component.literal("  " + f.getName().replace(".png", "")), false);
         }

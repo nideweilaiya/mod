@@ -455,7 +455,7 @@ public class CompanionAICommands {
             ai.setModel(modelName);
         }
 
-        source.sendSuccess(() -> Component.literal("AI model set to: " + modelName), true);
+        source.sendSuccess(() -> Component.literal("AI 模型设置为: " + modelName), true);
         return 1;
     }
 
@@ -464,12 +464,12 @@ public class CompanionAICommands {
         if (player == null) return 0;
 
         String currentModel = CompanionConfig.getModel(player.getUUID());
-        source.sendSuccess(() -> Component.literal("Current AI model: " + currentModel), false);
+        source.sendSuccess(() -> Component.literal("当前 AI 模型: " + currentModel), false);
 
         AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
         if (companion != null && companion.isAlive()) {
             var ai = AICompanionMod.aiManager.getAI(companion);
-            source.sendSuccess(() -> Component.literal("Active AI model: " + ai.getModel()), false);
+            source.sendSuccess(() -> Component.literal("活跃 AI 模型: " + ai.getModel()), false);
         }
 
         return 1;

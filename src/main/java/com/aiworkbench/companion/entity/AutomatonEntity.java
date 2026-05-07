@@ -73,8 +73,14 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         SynchedEntityData.defineId(AutomatonEntity.class, EntityDataSerializers.INT);
     private static final EntityDataAccessor<Integer> DATA_AVAILABLE_POINTS =
         SynchedEntityData.defineId(AutomatonEntity.class, EntityDataSerializers.INT);
-
-    // ==================== Stat Allocation Fields ====================
+    private static final EntityDataAccessor<Integer> DATA_STRENGTH_POINTS =
+        SynchedEntityData.defineId(AutomatonEntity.class, EntityDataSerializers.INT);
+    private static final EntityDataAccessor<Integer> DATA_VITALITY_POINTS =
+        SynchedEntityData.defineId(AutomatonEntity.class, EntityDataSerializers.INT);
+    private static final EntityDataAccessor<Integer> DATA_SPEED_POINTS =
+        SynchedEntityData.defineId(AutomatonEntity.class, EntityDataSerializers.INT);
+    private static final EntityDataAccessor<Integer> DATA_DEFENSE_POINTS =
+        SynchedEntityData.defineId(AutomatonEntity.class, EntityDataSerializers.INT);
     private int strengthPoints = 0;   // 攻击力
     private int vitalityPoints = 0;   // 生命值
     private int speedPoints = 0;      // 移动速度
@@ -330,6 +336,10 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         this.entityData.define(DATA_XP, 0);
         this.entityData.define(DATA_XP_TO_NEXT, 130); // 50 + 1*80
         this.entityData.define(DATA_AVAILABLE_POINTS, 0);
+        this.entityData.define(DATA_STRENGTH_POINTS, 0);
+        this.entityData.define(DATA_VITALITY_POINTS, 0);
+        this.entityData.define(DATA_SPEED_POINTS, 0);
+        this.entityData.define(DATA_DEFENSE_POINTS, 0);
     }
 
     // ==================== Attribute Supplier ====================
@@ -528,6 +538,10 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
                 newCompanion.speedPoints = savedSpd;
                 newCompanion.defensePoints = savedDef;
                 newCompanion.entityData.set(DATA_AVAILABLE_POINTS, savedAvail);
+                newCompanion.entityData.set(DATA_STRENGTH_POINTS, savedStr);
+                newCompanion.entityData.set(DATA_VITALITY_POINTS, savedVit);
+                newCompanion.entityData.set(DATA_SPEED_POINTS, savedSpd);
+                newCompanion.entityData.set(DATA_DEFENSE_POINTS, savedDef);
                 newCompanion.applyStatAllocation();
 
                 newCompanion.showDialogue("§a我回来了！", 80);
@@ -1169,6 +1183,12 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         if (tag.contains("VitalityPoints")) vitalityPoints = tag.getInt("VitalityPoints");
         if (tag.contains("SpeedPoints")) speedPoints = tag.getInt("SpeedPoints");
         if (tag.contains("DefensePoints")) defensePoints = tag.getInt("DefensePoints");
+
+        // Sync loaded stats to client
+        this.entityData.set(DATA_STRENGTH_POINTS, strengthPoints);
+        this.entityData.set(DATA_VITALITY_POINTS, vitalityPoints);
+        this.entityData.set(DATA_SPEED_POINTS, speedPoints);
+        this.entityData.set(DATA_DEFENSE_POINTS, defensePoints);
 
         // Apply loaded stats (after all attributes are registered)
         applyStatAllocation();
@@ -2014,16 +2034,20 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
 
         if (allocated) {
             this.entityData.set(DATA_AVAILABLE_POINTS, available - points);
+            this.entityData.set(DATA_STRENGTH_POINTS, strengthPoints);
+            this.entityData.set(DATA_VITALITY_POINTS, vitalityPoints);
+            this.entityData.set(DATA_SPEED_POINTS, speedPoints);
+            this.entityData.set(DATA_DEFENSE_POINTS, defensePoints);
             applyStatAllocation();
         }
         return allocated;
     }
 
     public int getAvailablePoints() { return this.entityData.get(DATA_AVAILABLE_POINTS); }
-    public int getStrengthPoints() { return strengthPoints; }
-    public int getVitalityPoints() { return vitalityPoints; }
-    public int getSpeedPoints() { return speedPoints; }
-    public int getDefensePoints() { return defensePoints; }
+    public int getStrengthPoints() { return this.entityData.get(DATA_STRENGTH_POINTS); }
+    public int getVitalityPoints() { return this.entityData.get(DATA_VITALITY_POINTS); }
+    public int getSpeedPoints() { return this.entityData.get(DATA_SPEED_POINTS); }
+    public int getDefensePoints() { return this.entityData.get(DATA_DEFENSE_POINTS); }
 
     public void resetAllStats() {
         strengthPoints = 0;
@@ -2032,6 +2056,10 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         defensePoints = 0;
         int totalLevels = (level - 1);
         this.entityData.set(DATA_AVAILABLE_POINTS, totalLevels * POINTS_PER_LEVEL);
+        this.entityData.set(DATA_STRENGTH_POINTS, 0);
+        this.entityData.set(DATA_VITALITY_POINTS, 0);
+        this.entityData.set(DATA_SPEED_POINTS, 0);
+        this.entityData.set(DATA_DEFENSE_POINTS, 0);
         applyStatAllocation();
     }
 
@@ -2074,6 +2102,10 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         vitalityPoints = 0;
         speedPoints = 0;
         defensePoints = 0;
+        this.entityData.set(DATA_STRENGTH_POINTS, 0);
+        this.entityData.set(DATA_VITALITY_POINTS, 0);
+        this.entityData.set(DATA_SPEED_POINTS, 0);
+        this.entityData.set(DATA_DEFENSE_POINTS, 0);
         applyStatAllocation();
 
         AICompanionMod.LOGGER.info("[Level] Companion level set to {} (admin), {} points available", level, totalPoints);

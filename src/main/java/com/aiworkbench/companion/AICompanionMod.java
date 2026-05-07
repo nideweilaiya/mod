@@ -52,20 +52,10 @@ public class AICompanionMod {
     public static final DeferredRegister<MenuType<?>> MENU_TYPES =
         DeferredRegister.create(ForgeRegistries.MENU_TYPES, MODID);
 
-    @SuppressWarnings("null")
     public static final java.util.function.Supplier<MenuType<CompanionContainer>> COMPANION_CONTAINER =
         MENU_TYPES.register("companion_container",
-            () -> IForgeMenuType.create((containerId, inv, data) -> {
-                // data 中有 companion 的 entityId（由 openMenu 自动写入）
-                int entityId = data.readInt();
-                net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
-                if (mc.level == null) return new CompanionContainer(containerId, inv, null);
-                net.minecraft.world.entity.Entity entity = mc.level.getEntity(entityId);
-                if (entity instanceof com.aiworkbench.companion.entity.AutomatonEntity companion) {
-                    return new CompanionContainer(containerId, inv, companion);
-                }
-                return new CompanionContainer(containerId, inv, null);
-            }));
+            () -> IForgeMenuType.create((containerId, inv, data) ->
+                new CompanionContainer(containerId, inv)));
 
     public AICompanionMod() {
         // Register entity types, items, creative tab, and menu types on the MOD bus

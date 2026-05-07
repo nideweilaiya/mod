@@ -1,5 +1,6 @@
 package com.aiworkbench.companion.inventory;
 
+import com.aiworkbench.companion.AICompanionMod;
 import com.aiworkbench.companion.entity.AutomatonEntity;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.Mob;
@@ -23,14 +24,42 @@ import org.jetbrains.annotations.NotNull;
  */
 public class CompanionContainer extends AbstractContainerMenu {
 
+    // 静态引用：在 openMenu 前设置，Container 构造时读取
+    private static final java.util.Map<java.util.UUID, com.aiworkbench.companion.entity.AutomatonEntity>
+        pendingCompanions = new java.util.concurrent.ConcurrentHashMap<>();
+
+    public static void setPendingCompanion(java.util.UUID playerId, com.aiworkbench.companion.entity.AutomatonEntity companion) {
+        pendingCompanions.put(playerId, companion);
+    }
+
     private final AutomatonEntity companion;
     private final IItemHandler companionInvHandler;
 
+    /** MenuType 构造器（客户端和服务端通用） */
+    public CompanionContainer(int containerId, Inventory playerInv) {
+        super(null, containerId);
+        // 从静态映射中获取同伴引用
+        AutomatonEntity c = pendingCompanions.remove(playerInv.player.getUUID());
+        this.companion = c != null ? c : null;
+        this.companionInvHandler = companion != null ? new CompanionItemHandler(companion) : null;
+
+        if (companion == null) {
+            AICompanionMod.LOGGER.warn("[CompanionContainer] Companion not found for player {}", playerInv.player.getName().getString());
+            return;
+        }
+
+        addSlots(playerInv);
+    }
+
+    /** 直接构造器（服务端 createMenu 使用） */
     public CompanionContainer(int containerId, Inventory playerInv, AutomatonEntity companion) {
-        super(null, containerId); // MenuType set via registration, null is fine here
+        super(null, containerId);
         this.companion = companion;
         this.companionInvHandler = new CompanionItemHandler(companion);
+        addSlots(playerInv);
+    }
 
+    private void addSlots(Inventory playerInv) {
         int equipY = 18;
         int compInvY = 54;
         int playerInvY = 122;

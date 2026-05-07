@@ -81,18 +81,18 @@ public class CompanionLifecycleCommands {
     private static int showStatus(CommandSourceStack source) {
         ServerPlayer player = source.getPlayer();
         if (player == null) {
-            source.sendFailure(Component.literal("Must be used by a player"));
+            source.sendFailure(Component.literal("必须由玩家执行"));
             return 0;
         }
 
         AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
         if (companion == null || !companion.isAlive()) {
-            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            source.sendFailure(Component.literal("你没有同伴"));
             return 0;
         }
 
         source.sendSuccess(() -> Component.literal("=== Companion Status ==="), false);
-        source.sendSuccess(() -> Component.literal("Mode: " + companion.getCurrentModeString()), false);
+        source.sendSuccess(() -> Component.literal("模式: " + companion.getCurrentModeString()), false);
         source.sendSuccess(() -> Component.literal("Guard: " + (companion.isGuardModeEnabled() ? "ON" : "OFF")), false);
         source.sendSuccess(() -> Component.literal("Mine: " + (companion.isMineModeEnabled() ? "ON" : "OFF")), false);
         source.sendSuccess(() -> Component.literal("Chop: " + (companion.isChopModeEnabled() ? "ON" : "OFF")), false);
@@ -123,7 +123,7 @@ public class CompanionLifecycleCommands {
                 source.sendSuccess(() -> Component.literal("  §e" + equipNames[idx] + "§f: " + name), false);
             }
         }
-        source.sendSuccess(() -> Component.literal("Has Items: " + (companion.hasItems() ? "YES" : "NO")), false);
+        source.sendSuccess(() -> Component.literal("携带物品: " + (companion.hasItems() ? "YES" : "NO")), false);
         source.sendSuccess(() -> Component.literal("============================"), false);
 
         return 1;
@@ -132,7 +132,7 @@ public class CompanionLifecycleCommands {
     private static int reviveCompanion(CommandSourceStack source) {
         ServerPlayer player = source.getPlayer();
         if (player == null) {
-            source.sendFailure(Component.literal("Must be used by a player"));
+            source.sendFailure(Component.literal("必须由玩家执行"));
             return 0;
         }
 
@@ -140,7 +140,7 @@ public class CompanionLifecycleCommands {
         var manager = AICompanionMod.companionManager;
 
         if (manager == null) {
-            source.sendFailure(Component.literal("Companion system not initialized"));
+            source.sendFailure(Component.literal("同伴系统未初始化"));
             return 0;
         }
 
@@ -174,7 +174,7 @@ public class CompanionLifecycleCommands {
                     player.getName().getString(), characterId, skinType);
             return 1;
         } else {
-            source.sendFailure(Component.literal("Failed to revive companion"));
+            source.sendFailure(Component.literal("复活同伴失败"));
             return 0;
         }
     }
@@ -182,19 +182,19 @@ public class CompanionLifecycleCommands {
     private static int teleportToPlayer(CommandSourceStack source) {
         ServerPlayer player = source.getPlayer();
         if (player == null) {
-            source.sendFailure(Component.literal("Must be used by a player"));
+            source.sendFailure(Component.literal("必须由玩家执行"));
             return 0;
         }
 
         var manager = AICompanionMod.companionManager;
         if (manager == null) {
-            source.sendFailure(Component.literal("Companion system not initialized"));
+            source.sendFailure(Component.literal("同伴系统未初始化"));
             return 0;
         }
 
         AutomatonEntity companion = manager.getCompanion(player.getUUID());
         if (companion == null || !companion.isAlive()) {
-            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            source.sendFailure(Component.literal("你没有同伴"));
             return 0;
         }
 
@@ -216,13 +216,13 @@ public class CompanionLifecycleCommands {
     private static int toggleHide(CommandSourceStack source) {
         ServerPlayer player = source.getPlayer();
         if (player == null) {
-            source.sendFailure(Component.literal("Must be used by a player"));
+            source.sendFailure(Component.literal("必须由玩家执行"));
             return 0;
         }
 
         AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
         if (companion == null || !companion.isAlive()) {
-            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            source.sendFailure(Component.literal("你没有同伴"));
             return 0;
         }
 
@@ -235,13 +235,13 @@ public class CompanionLifecycleCommands {
     private static int comeToPlayer(CommandSourceStack source) {
         ServerPlayer player = source.getPlayer();
         if (player == null) {
-            source.sendFailure(Component.literal("Must be used by a player"));
+            source.sendFailure(Component.literal("必须由玩家执行"));
             return 0;
         }
 
         AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
         if (companion == null || !companion.isAlive()) {
-            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            source.sendFailure(Component.literal("你没有同伴"));
             return 0;
         }
 
@@ -253,13 +253,13 @@ public class CompanionLifecycleCommands {
     private static int setName(CommandSourceStack source, String name) {
         ServerPlayer player = source.getPlayer();
         if (player == null) {
-            source.sendFailure(Component.literal("Must be used by a player"));
+            source.sendFailure(Component.literal("必须由玩家执行"));
             return 0;
         }
 
         AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
         if (companion == null || !companion.isAlive()) {
-            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            source.sendFailure(Component.literal("你没有同伴"));
             return 0;
         }
 
@@ -275,13 +275,13 @@ public class CompanionLifecycleCommands {
     private static int showLevel(CommandSourceStack source) {
         ServerPlayer player = source.getPlayer();
         if (player == null) {
-            source.sendFailure(Component.literal("Must be used by a player"));
+            source.sendFailure(Component.literal("必须由玩家执行"));
             return 0;
         }
 
         AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
         if (companion == null || !companion.isAlive()) {
-            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            source.sendFailure(Component.literal("你没有同伴"));
             return 0;
         }
 
@@ -302,13 +302,13 @@ public class CompanionLifecycleCommands {
     private static int setLevel(CommandSourceStack source, int newLevel) {
         ServerPlayer player = source.getPlayer();
         if (player == null) {
-            source.sendFailure(Component.literal("Must be used by a player"));
+            source.sendFailure(Component.literal("必须由玩家执行"));
             return 0;
         }
 
         AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
         if (companion == null || !companion.isAlive()) {
-            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            source.sendFailure(Component.literal("你没有同伴"));
             return 0;
         }
 
@@ -321,13 +321,13 @@ public class CompanionLifecycleCommands {
     private static int goDown(CommandSourceStack source) {
         ServerPlayer player = source.getPlayer();
         if (player == null) {
-            source.sendFailure(Component.literal("Must be used by a player"));
+            source.sendFailure(Component.literal("必须由玩家执行"));
             return 0;
         }
 
         AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
         if (companion == null || !companion.isAlive()) {
-            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            source.sendFailure(Component.literal("你没有同伴"));
             return 0;
         }
 

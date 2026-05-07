@@ -33,13 +33,13 @@ public class CompanionBehaviorCommands {
     private static int toggleGuard(CommandSourceStack source) {
         ServerPlayer player = source.getPlayer();
         if (player == null) {
-            source.sendFailure(Component.literal("Must be used by a player"));
+            source.sendFailure(Component.literal("必须由玩家执行"));
             return 0;
         }
 
         AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
         if (companion == null || !companion.isAlive()) {
-            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            source.sendFailure(Component.literal("你没有同伴"));
             return 0;
         }
 
@@ -58,13 +58,13 @@ public class CompanionBehaviorCommands {
     private static int toggleMine(CommandSourceStack source) {
         ServerPlayer player = source.getPlayer();
         if (player == null) {
-            source.sendFailure(Component.literal("Must be used by a player"));
+            source.sendFailure(Component.literal("必须由玩家执行"));
             return 0;
         }
 
         AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
         if (companion == null || !companion.isAlive()) {
-            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            source.sendFailure(Component.literal("你没有同伴"));
             return 0;
         }
 
@@ -83,13 +83,13 @@ public class CompanionBehaviorCommands {
     private static int toggleChop(CommandSourceStack source) {
         ServerPlayer player = source.getPlayer();
         if (player == null) {
-            source.sendFailure(Component.literal("Must be used by a player"));
+            source.sendFailure(Component.literal("必须由玩家执行"));
             return 0;
         }
 
         AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
         if (companion == null || !companion.isAlive()) {
-            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            source.sendFailure(Component.literal("你没有同伴"));
             return 0;
         }
 
@@ -108,13 +108,13 @@ public class CompanionBehaviorCommands {
     private static int setFollowMode(CommandSourceStack source) {
         ServerPlayer player = source.getPlayer();
         if (player == null) {
-            source.sendFailure(Component.literal("Must be used by a player"));
+            source.sendFailure(Component.literal("必须由玩家执行"));
             return 0;
         }
 
         AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
         if (companion == null || !companion.isAlive()) {
-            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            source.sendFailure(Component.literal("你没有同伴"));
             return 0;
         }
 
@@ -133,13 +133,13 @@ public class CompanionBehaviorCommands {
     private static int toggleFollowMode(CommandSourceStack source) {
         ServerPlayer player = source.getPlayer();
         if (player == null) {
-            source.sendFailure(Component.literal("Must be used by a player"));
+            source.sendFailure(Component.literal("必须由玩家执行"));
             return 0;
         }
 
         AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
         if (companion == null || !companion.isAlive()) {
-            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            source.sendFailure(Component.literal("你没有同伴"));
             return 0;
         }
 
@@ -153,13 +153,13 @@ public class CompanionBehaviorCommands {
     private static int togglePatrol(CommandSourceStack source) {
         ServerPlayer player = source.getPlayer();
         if (player == null) {
-            source.sendFailure(Component.literal("Must be used by a player"));
+            source.sendFailure(Component.literal("必须由玩家执行"));
             return 0;
         }
 
         AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
         if (companion == null || !companion.isAlive()) {
-            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            source.sendFailure(Component.literal("你没有同伴"));
             return 0;
         }
 
@@ -172,13 +172,13 @@ public class CompanionBehaviorCommands {
     private static int stopMovement(CommandSourceStack source) {
         ServerPlayer player = source.getPlayer();
         if (player == null) {
-            source.sendFailure(Component.literal("Must be used by a player"));
+            source.sendFailure(Component.literal("必须由玩家执行"));
             return 0;
         }
 
         AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
         if (companion == null || !companion.isAlive()) {
-            source.sendFailure(Component.literal("You don't have a companion NPC"));
+            source.sendFailure(Component.literal("你没有同伴"));
             return 0;
         }
 

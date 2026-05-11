@@ -392,6 +392,14 @@ public class CompanionSettingsScreen extends Screen {
     private void sendCmd(String cmd) {
         if (this.minecraft != null && this.minecraft.getConnection() != null) {
             this.minecraft.getConnection().sendCommand(cmd);
+            // Schedule screen rebuild to reflect new state
+            if (this.minecraft != null) {
+                this.minecraft.execute(() -> {
+                    if (this.minecraft.screen == CompanionSettingsScreen.this) {
+                        this.minecraft.setScreen(new CompanionSettingsScreen(parent));
+                    }
+                });
+            }
         }
     }
 

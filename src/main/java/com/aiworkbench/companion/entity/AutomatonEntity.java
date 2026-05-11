@@ -728,6 +728,10 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             if (tickCount - lastHurtTime > 100 && this.getHealth() < this.getMaxHealth()) {
                 this.heal(1.0f);
             }
+            // Auto-eat: consume food from inventory when health < 50%
+            if (this.getHealth() < this.getMaxHealth() * 0.5f) {
+                tryAutoEat();
+            }
         }
 
         // Skill Engine - takes priority over goal system when active
@@ -1012,6 +1016,27 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             AICompanionMod.LOGGER.debug("[AutomatonEntity] Auto-equip suppressed (backpack open)");
         } else {
             AICompanionMod.LOGGER.debug("[AutomatonEntity] Auto-equip resumed (backpack closed)");
+        }
+    }
+
+    private void tryAutoEat() {
+        for (int i = 0; i < INVENTORY_SIZE; i++) {
+            ItemStack stack = this.inventory.get(i);
+            if (stack.isEmpty()) continue;
+            if (stack.getItem().isEdible()) {
+                var props = stack.getItem().getFoodProperties();
+                if (props != null) {
+                    float healAmount = props.getNutrition();
+                    this.heal(healAmount);
+                    stack.shrink(1);
+                    if (stack.isEmpty()) this.inventory.set(i, ItemStack.EMPTY);
+                    this.level().broadcastEntityEvent(this, (byte) 9); // eating particles
+                    this.playSound(net.minecraft.sounds.SoundEvents.GENERIC_EAT, 0.8f, 1.0f);
+                    AICompanionMod.LOGGER.info("[AutomatonEntity] Auto-ate {} healed {}HP (HP: {})",
+                        stack.getItem(), healAmount, this.getHealth());
+                    return;
+                }
+            }
         }
     }
 

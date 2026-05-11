@@ -5,7 +5,9 @@ import com.aiworkbench.companion.entity.AutomatonEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.goal.Goal;
+import net.minecraft.world.entity.animal.*;
 import net.minecraft.world.item.*;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.*;
@@ -45,6 +47,12 @@ public class CompanionFarmGoal extends Goal {
     private int blacklistTicks;
     private static final int BLACKLIST_DURATION = 200;
 
+    // 动物互动
+    private LivingEntity animalTarget;
+    private int animalCooldown;
+    private static final int ANIMAL_COOLDOWN = 100; // 5秒后再找下一只
+    private static final double ANIMAL_REACH_SQ = 3.0 * 3.0;
+
     public CompanionFarmGoal(AutomatonEntity companion, double speed) {
         this.companion = companion;
         this.speed = speed;
@@ -58,8 +66,13 @@ public class CompanionFarmGoal extends Goal {
         if (companion.isGuardModeEnabled()) return false;
         if (isBreaking) return true;
         if (hostilesNearby()) { companion.setGuardModeEnabled(true); return false; }
+        if (animalCooldown > 0) { animalCooldown--; return false; }
+        // 优先找作物
         target = scan();
-        return target != null;
+        if (target != null) return true;
+        // 无作物→找动物
+        animalTarget = scanAnimal();
+        return animalTarget != null;
     }
 
     @Override
@@ -72,7 +85,7 @@ public class CompanionFarmGoal extends Goal {
             companion.showDialogue("§c敌人！切换战斗", 40);
             return false;
         }
-        return target != null || (isBreaking && scan() != null);
+        return target != null || animalTarget != null || (isBreaking && scan() != null);
     }
 
     private boolean hostilesNearby() {
@@ -96,10 +109,32 @@ public class CompanionFarmGoal extends Goal {
         if (target != null && companion.level() instanceof ServerLevel sl)
             sl.destroyBlockProgress(companion.getId(), target, -1);
         isBreaking = false; target = null;
+        animalTarget = null;
     }
 
     @Override
     public void tick() {
+        // === 动物互动（无作物目标时） ===
+        if (target == null && animalTarget != null && animalTarget.isAlive()) {
+            double distSq = companion.distanceToSqr(animalTarget);
+            companion.getLookControl().setLookAt(animalTarget, 30f, companion.getMaxHeadYRot());
+
+            if (distSq > ANIMAL_REACH_SQ) {
+                companion.getNavigation().moveTo(animalTarget, speed);
+                return;
+            }
+            companion.getNavigation().stop();
+            interactWithAnimal();
+            animalTarget = null;
+            animalCooldown = ANIMAL_COOLDOWN;
+            target = scan(); // 交互完继续找作物
+            clearTarget();
+            return;
+        }
+        if (target == null && animalTarget != null && !animalTarget.isAlive()) {
+            animalTarget = null;
+        }
+
         if (blacklistTicks > 0) blacklistTicks--;
         else if (!blacklist.isEmpty()) { blacklist.clear(); }
 
@@ -162,6 +197,74 @@ public class CompanionFarmGoal extends Goal {
 
     private void clearTarget() {
         isBreaking = false; progress = 0f; mineTicks = 0;
+    }
+
+    // ===== 动物扫描与交互 =====
+
+    /** 扫描附近可互动的动物：可剪毛的羊、可挤奶的牛、可繁殖的动物 */
+    private LivingEntity scanAnimal() {
+        return companion.level().getEntities(companion,
+            companion.getBoundingBox().inflate(8),
+            e -> {
+                if (!e.isAlive()) return false;
+                if (e instanceof Sheep s && !s.isSheared() && hasItem(Items.SHEARS)) return true;
+                if (e instanceof Cow && hasItem(Items.BUCKET)) return true;
+                if (e instanceof Animal a && a.getAge() == 0 && !a.isInLove() && hasBreedItem(a)) return true;
+                return false;
+            }
+        ).stream().findFirst().map(e -> (LivingEntity) e).orElse(null);
+    }
+
+    private void interactWithAnimal() {
+        companion.animateSwing();
+        if (animalTarget instanceof Sheep sheep && !sheep.isSheared() && hasItem(Items.SHEARS)) {
+            sheep.setSheared(true);
+            int woolCount = 1 + sheep.level().random.nextInt(3);
+            companion.addItemToInventory(new ItemStack(Items.WHITE_WOOL, woolCount));
+            companion.showDialogue("§f✂ 剪羊毛", 30);
+        } else if (animalTarget instanceof Cow && hasItem(Items.BUCKET)) {
+            consumeOneItem(Items.BUCKET);
+            companion.addItemToInventory(new ItemStack(Items.MILK_BUCKET));
+            companion.showDialogue("§f🥛 挤牛奶", 30);
+        } else if (animalTarget instanceof Animal a && a.getAge() == 0 && !a.isInLove()) {
+            ItemStack breedItem = findBreedItem(a);
+            if (breedItem != null && !breedItem.isEmpty()) {
+                breedItem.shrink(1);
+                a.setInLove(null);
+                companion.showDialogue("§d❤ 繁殖", 30);
+            }
+        }
+    }
+
+    private boolean hasItem(Item item) {
+        for (int i = 0; i < companion.getInventorySize(); i++) {
+            ItemStack s = companion.getItem(i);
+            if (!s.isEmpty() && s.getItem() == item) return true;
+        }
+        return false;
+    }
+
+    private boolean hasBreedItem(Animal animal) {
+        return findBreedItem(animal) != null;
+    }
+
+    private ItemStack findBreedItem(Animal animal) {
+        for (int i = 0; i < companion.getInventorySize(); i++) {
+            ItemStack s = companion.getItem(i);
+            if (!s.isEmpty() && animal.isFood(s)) return s;
+        }
+        return null;
+    }
+
+    private void consumeOneItem(Item item) {
+        for (int i = 0; i < companion.getInventorySize(); i++) {
+            ItemStack s = companion.getItem(i);
+            if (!s.isEmpty() && s.getItem() == item) {
+                s.shrink(1);
+                if (s.isEmpty()) companion.setItem(i, ItemStack.EMPTY);
+                return;
+            }
+        }
     }
 
     // ===== 扫描 =====

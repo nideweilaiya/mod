@@ -1075,11 +1075,19 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         int planks = countPlanksItems(), sticks = countItems("stick");
         boolean hasCT = countItem(Items.CRAFTING_TABLE) > 0;
         if (target == Items.WOODEN_PICKAXE) {
+            // Ensure enough planks: 3 for pickaxe + optionally 4 for crafting table
             int need = hasCT ? 3 : 7;
-            if (planks < need) { int logs = countLogs(); if (logs > 0) { consumeLogs(1); addPlanks(4); planks += 4; } else return false; }
+            while (planks < need && countLogs() > 0) { consumeLogs(1); addPlanks(4); planks += 4; }
+            if (planks < need) return false;
             if (sticks < 2) { if (planks >= 2) { consumePlanksItems(2); addSticks(4); sticks += 4; planks -= 2; } else return false; }
-            if (!hasCT && planks >= 4) { consumePlanksItems(4); addItemToInventory(new ItemStack(Items.CRAFTING_TABLE)); planks -= 4; hasCT = true; }
-            if (!hasCT || planks < 3 || sticks < 2) return false;
+            // After sticks consumption, make CT if needed
+            if (!hasCT) {
+                while (planks < 4 && countLogs() > 0) { consumeLogs(1); addPlanks(4); planks += 4; }
+                if (planks >= 4) { consumePlanksItems(4); addItemToInventory(new ItemStack(Items.CRAFTING_TABLE)); planks -= 4; hasCT = true; }
+                else return false;
+            }
+            // Final check: need 3 planks + 2 sticks for pickaxe
+            if (planks < 3 || sticks < 2) return false;
             consumePlanksItems(3); consumeStickCount(2);
             addItemToInventory(new ItemStack(Items.WOODEN_PICKAXE));
             notifyOwner("§a合成了" + name + "！"); animateSwing();

@@ -538,7 +538,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         if (!this.level().isClientSide) {
             this.playSound(net.minecraft.sounds.SoundEvents.PLAYER_DEATH, 1.0f, 0.8f);
         }
-        // Drop inventory items and schedule respawn (server-side only)
+        // Schedule respawn (server-side only) — inventory preserved
         if (!this.level().isClientSide && !respawnPending) {
             respawnPending = true;
 
@@ -555,8 +555,6 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             // Find owner player before removing from manager
             String customName = this.getCustomName() != null ? this.getCustomName().getString() : "Companion";
             ServerPlayer owner = getOwner();
-
-            dropInventoryItems();
 
             // Shutdown AI brain to prevent memory leak
             if (AICompanionMod.aiManager != null) {
@@ -728,8 +726,8 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             if (tickCount - lastHurtTime > 100 && this.getHealth() < this.getMaxHealth()) {
                 this.heal(1.0f);
             }
-            // Auto-eat: consume food from inventory when health < 50%
-            if (this.getHealth() < this.getMaxHealth() * 0.5f) {
+            // Auto-eat: consume food when health < 75%
+            if (this.getHealth() < this.getMaxHealth() * 0.75f) {
                 tryAutoEat();
             }
             // Auto-smelt: check if we can smelt ores (every 10s)

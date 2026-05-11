@@ -226,37 +226,54 @@ public final class AutoUpgrader {
     }
 
     private static BlockPos findOrPlaceFurnace(AutomatonEntity entity) {
-        // 先找背包里的熔炉
+        net.minecraft.world.level.Level level = entity.level();
+        BlockPos origin = entity.blockPosition();
+
+        // 1. 先扫描附近16格内已有的熔炉
+        for (int dx = -16; dx <= 16; dx++) {
+            for (int dy = -4; dy <= 4; dy++) {
+                for (int dz = -16; dz <= 16; dz++) {
+                    BlockPos p = origin.offset(dx, dy, dz);
+                    if (level.getBlockState(p).getBlock() instanceof net.minecraft.world.level.block.FurnaceBlock) {
+                        return p.immutable();
+                    }
+                }
+            }
+        }
+
+        // 2. 没有已存在的熔炉→检查背包里有没有
         int furnaceSlot = -1;
         for (int i = 0; i < entity.getInventorySize(); i++) {
             if (entity.getItem(i).getItem() == Items.FURNACE) { furnaceSlot = i; break; }
         }
+        if (furnaceSlot < 0) {
+            AICompanionMod.LOGGER.info("[AutoUpgrade] No furnace available in inventory or nearby");
+            return null;
+        }
 
-        BlockPos pos = entity.blockPosition();
-        // 在脚下放熔炉
-        BlockPos place = pos;
-        net.minecraft.world.level.Level level = entity.level();
+        // 3. 找合适的放置位置（实体地面，非农田/作物）
+        BlockPos place = origin;
         while (level.getBlockState(place).isAir() && place.getY() > level.getMinBuildHeight() + 1) {
             place = place.below();
         }
         BlockPos furnacePos = place.above();
-        if (!level.getBlockState(furnacePos).isAir()) return null;
-
-        if (furnaceSlot >= 0) {
-            level.setBlock(furnacePos, Blocks.FURNACE.defaultBlockState(), 3);
-            entity.animateBlockPlace(furnacePos);
-            entity.getItem(furnaceSlot).shrink(1);
-            if (entity.getItem(furnaceSlot).isEmpty())
-                entity.setItem(furnaceSlot, ItemStack.EMPTY);
-        } else {
-            // 合成熔炉（8圆石）
-            if (countItem(entity, Items.COBBLESTONE) >= 8) {
-                consumeItems(entity, Items.COBBLESTONE, 8);
-                level.setBlock(furnacePos, Blocks.FURNACE.defaultBlockState(), 3);
-                entity.animateBlockPlace(furnacePos);
-                entity.addItemToInventory(new ItemStack(Items.FURNACE));
-            } else return null;
+        if (!level.getBlockState(furnacePos).isAir()) {
+            // 脚下被占→往旁边挪一格
+            furnacePos = origin.east().above();
+            if (!level.getBlockState(furnacePos).isAir()) return null;
         }
+        // 不能放在农田上
+        if (level.getBlockState(place).getBlock() instanceof net.minecraft.world.level.block.FarmBlock) {
+            AICompanionMod.LOGGER.info("[AutoUpgrade] Refusing to place furnace on farmland");
+            return null;
+        }
+
+        level.setBlock(furnacePos, Blocks.FURNACE.defaultBlockState(), 3);
+        entity.animateBlockPlace(furnacePos);
+        entity.getItem(furnaceSlot).shrink(1);
+        if (entity.getItem(furnaceSlot).isEmpty())
+            entity.setItem(furnaceSlot, ItemStack.EMPTY);
+
         AICompanionMod.LOGGER.info("[AutoUpgrade] Placed furnace at {}", furnacePos);
         entity.showDialogue("§8🔥 放置熔炉", 30);
         return furnacePos;
@@ -284,18 +301,19 @@ public final class AutoUpgrader {
             (net.minecraft.world.level.block.entity.FurnaceBlockEntity) level.getBlockEntity(furnacePos);
         if (furnace == null) return false;
 
-        // 放入铁矿石
-        int oreSlot = findItemSlot(entity, Items.IRON_ORE, Items.RAW_IRON);
-        if (oreSlot < 0) return false;
-        ItemStack ore = entity.getItem(oreSlot);
+        // 放入矿石（一次放满：最多64个）
         ItemStack smeltInput = furnace.getItem(0);
         if (!smeltInput.isEmpty()) return false; // 熔炉忙
 
-        furnace.setItem(0, ore.copyWithCount(1));
-        ore.shrink(1);
+        int oreSlot = findItemSlot(entity, Items.IRON_ORE, Items.RAW_IRON);
+        if (oreSlot < 0) return false;
+        ItemStack ore = entity.getItem(oreSlot);
+        int putCount = Math.min(ore.getCount(), 64);
+        furnace.setItem(0, ore.copyWithCount(putCount));
+        ore.shrink(putCount);
         if (ore.isEmpty()) entity.setItem(oreSlot, ItemStack.EMPTY);
 
-        // 放入燃料
+        // 放入燃料（1煤=8矿，按比例放）
         int fuelSlot = findItemSlot(entity, Items.COAL, Items.CHARCOAL);
         if (fuelSlot < 0) return false;
         ItemStack fuel = entity.getItem(fuelSlot);
@@ -306,12 +324,14 @@ public final class AutoUpgrader {
             return true;
         }
 
-        furnace.setItem(1, fuel.copyWithCount(1));
-        fuel.shrink(1);
+        int fuelNeeded = Math.max(1, (putCount + 7) / 8);
+        int fuelPut = Math.min(fuel.getCount(), fuelNeeded);
+        furnace.setItem(1, fuel.copyWithCount(fuelPut));
+        fuel.shrink(fuelPut);
         if (fuel.isEmpty()) entity.setItem(fuelSlot, ItemStack.EMPTY);
 
-        AICompanionMod.LOGGER.info("[AutoUpgrade] Started smelting iron at {}", furnacePos);
-        entity.showDialogue("§8🔥 冶炼铁矿石...", 40);
+        AICompanionMod.LOGGER.info("[AutoUpgrade] Started smelting: {} ore + {} fuel at {}", putCount, fuelPut, furnacePos);
+        entity.showDialogue("§8🔥 冶炼" + putCount + "个矿石...", 40);
         return true;
     }
 

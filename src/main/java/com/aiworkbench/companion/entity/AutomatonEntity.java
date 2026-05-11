@@ -201,6 +201,13 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     private static final int AI_SPONTANEOUS_MIN = 2400; // 2 minutes minimum
     private static final int AI_SPONTANEOUS_MAX = 4800; // 4 minutes maximum
 
+    // ==================== Recent Events ====================
+    private final java.util.LinkedList<RecentEvent> recentEvents = new java.util.LinkedList<>();
+    private static final int MAX_RECENT_EVENTS = 8;
+    private long lastEventDialogueTick = 0;
+    private static final long EVENT_DIALOGUE_COOLDOWN_TICKS = 200; // 10 seconds
+    private boolean wasDaytime = true; // Track day→night transition
+
     // ==================== Skill Engine ====================
     private final SkillEngine skillEngine = new SkillEngine();
     private volatile boolean skillActive = false;
@@ -733,6 +740,13 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         // Autonomous AI decision every 60 ticks (~3 seconds) - check surroundings
         if (tickCount % 60 == 0) {
             evaluateSituation();
+            // Nightfall detection for LLM contextual dialogue
+            boolean isDayNow = this.level().isDay();
+            if (wasDaytime && !isDayNow) {
+                addRecentEvent("nightfall", "夜幕降临了");
+                triggerEventDialogue("nightfall", null);
+            }
+            wasDaytime = isDayNow;
         }
 
         // AI spontaneous dialogue every 2-4 minutes (server-side only)
@@ -1085,6 +1099,8 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
 
         // Trigger AI spontaneous dialogue
         var ai = AICompanionMod.aiManager.getAI(this);
+        // Reset cooldown before async call to prevent overlapping triggers
+        aiSpontaneousCooldown = AI_SPONTANEOUS_MIN + this.random.nextInt(AI_SPONTANEOUS_MAX - AI_SPONTANEOUS_MIN);
         ai.generateSpontaneousAction().thenAccept(response -> {
             if (response != null && !response.isEmpty() && !response.equals("...")) {
                 // Must run on server thread
@@ -1098,9 +1114,49 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
                 }
             }
         });
+    }
 
-        // Reset cooldown (2-4 minutes)
-        aiSpontaneousCooldown = AI_SPONTANEOUS_MIN + this.random.nextInt(AI_SPONTANEOUS_MAX - AI_SPONTANEOUS_MIN);
+    // ==================== Recent Event Methods ====================
+
+    public void addRecentEvent(String type, String description) {
+        addRecentEvent(type, description, null);
+    }
+
+    public void addRecentEvent(String type, String description,
+                               java.util.Map<String, Object> data) {
+        recentEvents.addLast(new RecentEvent(type, description,
+            this.level().getGameTime(), data));
+        while (recentEvents.size() > MAX_RECENT_EVENTS) {
+            recentEvents.removeFirst();
+        }
+    }
+
+    public java.util.List<RecentEvent> getRecentEvents() {
+        return new java.util.ArrayList<>(recentEvents);
+    }
+
+    public void triggerEventResponse(String eventType, java.util.Map<String, Object> ctx) {
+        triggerEventDialogue(eventType, ctx);
+    }
+
+    private void triggerEventDialogue(String eventType, java.util.Map<String, Object> ctx) {
+        if (AICompanionMod.aiManager == null) return;
+        if (this.level().getGameTime() - lastEventDialogueTick < EVENT_DIALOGUE_COOLDOWN_TICKS) return;
+        lastEventDialogueTick = this.level().getGameTime();
+        var ai = AICompanionMod.aiManager.getAI(this);
+        if (ai == null) return;
+        ai.generateEventResponse(eventType, ctx).thenAccept(response -> {
+            if (response != null && !response.isEmpty() && !response.equals("...")) {
+                net.minecraft.server.MinecraftServer srv = this.level().getServer();
+                if (srv != null) {
+                    srv.execute(() -> {
+                        if (this.isAlive()) {
+                            showDialogue("§d" + response, 80);
+                        }
+                    });
+                }
+            }
+        });
     }
 
     /**
@@ -1131,6 +1187,28 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
                 .map(key -> key.location().getPath())
                 .orElse("未知");
             context.put("biome", biomeName);
+
+            // === Push perception data for LLM context ===
+            PerceptionEngine.PerceptionData perception = getOrGatherPerception();
+            if (perception != null) {
+                context.put("nearby_resources", perception.resources != null
+                    ? new java.util.ArrayList<>(perception.resources) : java.util.Collections.emptyList());
+                context.put("has_hostile", perception.dangerHostile);
+                context.put("health_ratio", perception.health / this.getMaxHealth());
+            }
+
+            // === Push recent events (last 5 minutes) ===
+            if (!recentEvents.isEmpty()) {
+                java.util.List<String> eventDescs = new java.util.ArrayList<>();
+                for (RecentEvent e : recentEvents) {
+                    if (this.level().getGameTime() - e.gameTime < 6000) {
+                        eventDescs.add(e.description);
+                    }
+                }
+                if (!eventDescs.isEmpty()) {
+                    context.put("recent_event_descriptions", eventDescs);
+                }
+            }
 
             ai.updateContext(context);
         } catch (Exception e) {
@@ -2193,10 +2271,18 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     public void grantMiningXp(net.minecraft.world.level.block.state.BlockState state) {
         String name = state.getBlock().builtInRegistryHolder().key().location().getPath();
         int xp;
-        if (name.contains("diamond") || name.contains("emerald")) {
+        if (name.contains("diamond")) {
             xp = 25;
+            addRecentEvent("rare_resource", "发现了钻石");
+            triggerEventDialogue("rare_resource", java.util.Map.of("resource", "钻石"));
+        } else if (name.contains("emerald")) {
+            xp = 25;
+            addRecentEvent("rare_resource", "发现了绿宝石");
+            triggerEventDialogue("rare_resource", java.util.Map.of("resource", "绿宝石"));
         } else if (name.contains("ancient_debris")) {
             xp = 50;
+            addRecentEvent("rare_resource", "发现了远古残骸");
+            triggerEventDialogue("rare_resource", java.util.Map.of("resource", "远古残骸"));
         } else if (name.contains("netherite")) {
             xp = 40;
         } else if (name.contains("gold") || name.contains("lapis")) {
@@ -2223,8 +2309,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
      * Stats are no longer auto-applied; player allocates points manually.
      */
     private void onLevelUp() {
-        // Grant attribute points (player chooses where to spend)
-        int newPoints = level + POINTS_PER_LEVEL - 1; // cumulative: level 2 → 3 pts, level N → (N-1)*3
+        // Grant attribute points (3 points per level, cumulative)
         this.entityData.set(DATA_AVAILABLE_POINTS, (level - 1) * POINTS_PER_LEVEL);
 
         // Play sound and particles
@@ -2233,6 +2318,9 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         // Notify owner
         String msg = "§6§l✦ 升级！同伴达到 Lv." + level + "！ +" + POINTS_PER_LEVEL + "属性点";
         showDialogue(msg, 100);
+        // Record event + trigger LLM contextual level-up dialogue
+        addRecentEvent("level_up", "升到了Lv." + level);
+        triggerEventDialogue("level_up", java.util.Map.of("level", level));
 
         ServerPlayer owner = getOwner();
         if (owner != null) {
@@ -2653,5 +2741,21 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
      */
     public void showDialogue(String text) {
         showDialogue(text, DEFAULT_DIALOGUE_DURATION_TICKS);
+    }
+
+    // ==================== RecentEvent Inner Class ====================
+
+    public static class RecentEvent {
+        public final String type;
+        public final String description;
+        public final long gameTime;
+        public final java.util.Map<String, Object> data;
+
+        public RecentEvent(String type, String description, long gameTime, java.util.Map<String, Object> data) {
+            this.type = type;
+            this.description = description;
+            this.gameTime = gameTime;
+            this.data = data != null ? new java.util.LinkedHashMap<>(data) : new java.util.LinkedHashMap<>();
+        }
     }
 }

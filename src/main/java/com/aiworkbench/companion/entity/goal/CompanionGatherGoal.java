@@ -454,8 +454,8 @@ public class CompanionGatherGoal extends Goal {
         }
 
         if (best != null) {
-            AICompanionMod.LOGGER.info("[GatherGoal] Scan→{} score={} dist={:.1f}{}",
-                level.getBlockState(best).getBlock(), bestScore, Math.sqrt(bestDist),
+            AICompanionMod.LOGGER.info("[GatherGoal] Scan→{} score={} dist={}{}",
+                level.getBlockState(best).getBlock(), bestScore, String.format("%.1f", Math.sqrt(bestDist)),
                 treeMode ? " [tree]" : (pendingResource != null ? " [barrier]" : ""));
         }
         return best;

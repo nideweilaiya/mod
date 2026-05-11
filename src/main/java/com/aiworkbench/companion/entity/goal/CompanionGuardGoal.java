@@ -98,13 +98,19 @@ public class CompanionGuardGoal extends Goal {
     @Override
     public void stop() {
         inCombat = false;
+        // Save enemy name before nullifying target
+        String enemyName = target != null ? target.getName().getString() : "敌人";
         target = null;
         equipped = false;
         companion.setGuardTarget(null);
         companion.getNavigation().stop();
         companion.setGuardModeEnabled(false);
         companion.setGatherModeEnabled(true);
+        // Instant hardcoded feedback
         companion.showDialogue("§a威胁清除", 40);
+        // Record event + trigger LLM contextual dialogue
+        companion.addRecentEvent("combat_end", "击败了" + enemyName);
+        companion.triggerEventResponse("combat_end", java.util.Map.of("enemy", enemyName));
         AICompanionMod.LOGGER.info("[GuardGoal] Disengaged → resume gather");
     }
 

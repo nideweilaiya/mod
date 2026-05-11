@@ -1,14 +1,8 @@
 package com.aiworkbench.companion.ai;
 
 import com.aiworkbench.companion.AICompanionMod;
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
 import net.minecraft.server.level.ServerPlayer;
 
-import java.io.*;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.UUID;
 import java.util.concurrent.*;
@@ -18,7 +12,6 @@ import java.util.concurrent.*;
  * Uses LLM to generate dialogue and behavior
  */
 public class CompanionAI {
-    private static final String OLLAMA_BASE = "http://127.0.0.1:11434";
     private static final int TIMEOUT_MS = 30000;
     private static final int MAX_RETRIES = 2;
 
@@ -26,10 +19,6 @@ public class CompanionAI {
     private String model;
 
     private final ExecutorService executor = Executors.newCachedThreadPool();
-    private final Gson gson = new GsonBuilder().create();
-
-    // Regex for stripping <think> tags from LLM output (qwen3.5)
-    private static final String THINK_STRIP_REGEX = "<think>[\\s\\S]*?</think>";
 
     // Context for this companion
     private final String companionId;
@@ -169,6 +158,59 @@ public class CompanionAI {
         }, executor);
     }
 
+    /**
+     * Generate a contextual event response for non-urgent moments
+     * (combat_end, level_up, rare_resource, nightfall).
+     */
+    public CompletableFuture<String> generateEventResponse(String eventType, java.util.Map<String, Object> eventContext) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                String prompt = buildEventPrompt(eventType, eventContext);
+                return callLLM(prompt);
+            } catch (Exception e) {
+                AICompanionMod.LOGGER.error("AI event response error for {}: {}", eventType, e.getMessage());
+                return null;
+            }
+        }, executor);
+    }
+
+    private String buildEventPrompt(String eventType, java.util.Map<String, Object> eventContext) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(PERSONALITY).append("\n");
+        sb.append("你的主人是 ").append(ownerName).append("。\n");
+        sb.append("当前情境：").append(formatContext()).append("\n");
+
+        switch (eventType != null ? eventType : "") {
+            case "combat_end":
+                sb.append("你刚结束了一场战斗。");
+                if (eventContext != null && eventContext.containsKey("enemy")) {
+                    sb.append("击败了").append(eventContext.get("enemy")).append("。");
+                }
+                sb.append("请用一句话表达你的感受（8-20字中文）。\n");
+                break;
+            case "level_up":
+                int lv = eventContext != null && eventContext.containsKey("level")
+                    ? ((Number) eventContext.get("level")).intValue() : 1;
+                sb.append("你刚刚升到了").append(lv).append("级！请用一句话庆祝一下（8-20字中文）。\n");
+                break;
+            case "rare_resource":
+                String res = eventContext != null
+                    ? (String) eventContext.getOrDefault("resource", "稀有矿物") : "稀有矿物";
+                sb.append("你发现了稀有资源：").append(res).append("。");
+                sb.append("请用一句话表达兴奋之情（8-20字中文）。\n");
+                break;
+            case "nightfall":
+                sb.append("夜幕降临了。请用一句话提醒主人或表达你的感受（8-20字中文）。\n");
+                break;
+            default:
+                sb.append("请用一句话表达你现在的感受或想法（8-20字中文）。\n");
+                break;
+        }
+        sb.append("直接输出文字，不要加引号或多余格式。\n");
+        sb.append("assistant: ");
+        return sb.toString();
+    }
+
     private String buildPrompt(String playerMessage) {
         StringBuilder sb = new StringBuilder();
         sb.append(PERSONALITY).append("\n");
@@ -184,11 +226,47 @@ public class CompanionAI {
     }
 
     private String buildSpontaneousPrompt() {
-        return PERSONALITY + "\n"
-            + "你的主人是 " + ownerName + "。\n"
-            + "当前情境：" + formatContext() + "\n"
-            + "请用一句话表达你现在的感受或想法（8-20字）。直接输出文字，不要加引号或多余格式。\n"
-            + "assistant: ";
+        StringBuilder sb = new StringBuilder();
+        sb.append(PERSONALITY).append("\n");
+        sb.append("你的主人是 ").append(ownerName).append("。\n");
+        sb.append("当前情境：").append(formatContext()).append("\n");
+
+        // Environmental perception (pushed by pushAiContext)
+        @SuppressWarnings("unchecked")
+        java.util.List<String> nearbyResources =
+            (java.util.List<String>) companionState.get("nearby_resources");
+        if (nearbyResources != null && !nearbyResources.isEmpty()) {
+            sb.append("附近资源：");
+            java.util.List<String> unique = nearbyResources.stream()
+                .distinct().limit(5).collect(java.util.stream.Collectors.toList());
+            sb.append(String.join("、", unique)).append("\n");
+        }
+
+        Boolean hasHostile = (Boolean) companionState.get("has_hostile");
+        if (Boolean.TRUE.equals(hasHostile)) {
+            sb.append("警告：附近有敌对生物。\n");
+        }
+
+        Double healthRatio = (Double) companionState.get("health_ratio");
+        if (healthRatio != null && healthRatio < 0.5) {
+            sb.append("你受伤了（血量较低）。\n");
+        }
+
+        @SuppressWarnings("unchecked")
+        java.util.List<String> recentEventDescs =
+            (java.util.List<String>) companionState.get("recent_event_descriptions");
+        if (recentEventDescs != null && !recentEventDescs.isEmpty()) {
+            sb.append("最近发生的事：");
+            for (String desc : recentEventDescs) {
+                sb.append(desc).append("; ");
+            }
+            sb.append("\n");
+        }
+
+        sb.append("根据以上情境，请用一句话表达你现在的感受或想法（8-20字中文）。");
+        sb.append("直接输出文字，不要加引号或多余格式。\n");
+        sb.append("assistant: ");
+        return sb.toString();
     }
 
     /**
@@ -205,12 +283,6 @@ public class CompanionAI {
     }
 
     private String callLLM(String prompt) throws Exception {
-        // Use chat API for better multi-turn conversation support
-        Map<String, Object> request = new HashMap<>();
-        request.put("model", model);
-        request.put("stream", false);
-        request.put("options", Map.of("temperature", 0.3, "num_predict", 150));
-
         // Build messages for chat API
         List<Map<String, String>> messages = new ArrayList<>();
 
@@ -245,99 +317,6 @@ public class CompanionAI {
         String result = com.aiworkbench.companion.ai.OllamaClient.chat(
             model, messages, opts, TIMEOUT_MS, MAX_RETRIES);
         return result != null ? result : "...";
-    }
-
-    private String extractChatResponse(Map<String, Object> resp) {
-        String response = "";
-        String thinking = "";
-
-        AICompanionMod.LOGGER.info("[CompanionAI] Chat resp keys: " + resp.keySet());
-
-        // Chat API returns message.content
-        if (resp.containsKey("message")) {
-            Object msg = resp.get("message");
-            AICompanionMod.LOGGER.info("[CompanionAI] message type: " + (msg == null ? "null" : msg.getClass().getName()));
-            if (msg instanceof Map) {
-                Map<?, ?> msgMap = (Map<?, ?>) msg;
-                AICompanionMod.LOGGER.info("[CompanionAI] message keys: " + msgMap.keySet());
-
-                // Get content - qwen3.5 chat API has content in message.content
-                Object content = msgMap.get("content");
-                AICompanionMod.LOGGER.info("[CompanionAI] content type: " + (content == null ? "null" : content.getClass().getName()));
-                if (content instanceof String) {
-                    response = ((String) content).trim();
-                    AICompanionMod.LOGGER.info("[CompanionAI] Got content from message.content, len=" + response.length());
-                }
-
-                // If content is "..." or empty, check thinking field (qwen3.5)
-                if (response.isEmpty() || response.equals("...")) {
-                    Object think = msgMap.get("thinking");
-                    if (think instanceof String) {
-                        thinking = ((String) think).trim();
-                        AICompanionMod.LOGGER.info("[CompanionAI] thinking field length: " + thinking.length());
-                        // Strip think tags from qwen3.5 output
-                        thinking = thinking.replaceAll(THINK_STRIP_REGEX, "").trim();
-                        if (!thinking.isEmpty()) {
-                            response = thinking;
-                            AICompanionMod.LOGGER.info("[CompanionAI] Using thinking as response");
-                        }
-                    }
-                }
-            }
-        }
-
-        AICompanionMod.LOGGER.info("[CompanionAI] Chat response length: " + response.length());
-        if (response.length() > 0) {
-            AICompanionMod.LOGGER.info("[CompanionAI] Chat response preview: " + response.substring(0, Math.min(50, response.length())));
-        } else {
-            AICompanionMod.LOGGER.warn("[CompanionAI] Chat response is empty");
-        }
-
-        return response.isEmpty() ? "..." : response;
-    }
-
-    private String extractResponse(Map<String, Object> resp) {
-        String response = "";
-        String thinking = "";
-
-        AICompanionMod.LOGGER.info("[CompanionAI] Raw resp keys: " + resp.keySet());
-
-        // Get response field
-        if (resp.containsKey("response")) {
-            response = ((String) resp.get("response")).trim();
-            AICompanionMod.LOGGER.info("[CompanionAI] response field length=" + response.length());
-        }
-
-        // Get thinking field (qwen3.5)
-        if (resp.containsKey("thinking")) {
-            thinking = (String) resp.get("thinking");
-            if (thinking != null) {
-                AICompanionMod.LOGGER.info("[CompanionAI] thinking field length=" + thinking.length());
-            }
-        }
-
-        // Strip think tags from qwen3.5 output
-        response = response.replaceAll(THINK_STRIP_REGEX, "").trim();
-        if (thinking != null) {
-            thinking = thinking.replaceAll(THINK_STRIP_REGEX, "").trim();
-        }
-
-        AICompanionMod.LOGGER.info("[CompanionAI] After strip, response length=" + response.length() + ", thinking length=" + thinking.length());
-
-        // Prefer response field, but if it's empty or very short, use thinking
-        if (response.length() < 3 && !thinking.isEmpty()) {
-            response = thinking;
-            AICompanionMod.LOGGER.info("[CompanionAI] Using thinking content as response");
-        }
-
-        AICompanionMod.LOGGER.info("[CompanionAI] Final response length: " + response.length());
-        if (response.length() > 0) {
-            AICompanionMod.LOGGER.info("[CompanionAI] Response preview: " + response.substring(0, Math.min(50, response.length())));
-        } else {
-            AICompanionMod.LOGGER.warn("[CompanionAI] Response is empty");
-        }
-
-        return response;
     }
 
     public void updateState(String key, Object value) {

@@ -66,6 +66,12 @@ public class CompanionQuickMenuScreen extends Screen {
         }).bounds(cx - btnW/2, y, btnW, btnH).build());
         y += btnH + gap;
 
+        // 属性加点
+        addRenderableWidget(Button.builder(Component.literal("§d✨ 属性加点"), btn -> {
+            this.minecraft.setScreen(new CompanionSettingsScreen(parent));
+        }).bounds(cx - btnW/2, y, btnW, btnH).build());
+        y += btnH + gap;
+
         // 传送
         addRenderableWidget(Button.builder(Component.literal("§b📍 传送到我"), btn -> {
             sendCmd("companion teleport"); this.onClose();

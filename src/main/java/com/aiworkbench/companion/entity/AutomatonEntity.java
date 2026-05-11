@@ -432,14 +432,15 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     // ==================== Attribute Supplier ====================
 
     public static AttributeSupplier.Builder createAttributes() {
+        // Base stats match a fresh player — attributes improve via level-up points
         return Mob.createMobAttributes()
-            .add(Attributes.MAX_HEALTH, 120.0D)     // 60 hearts - very tanky
-            .add(Attributes.MOVEMENT_SPEED, 0.3D)  // Match player sprint speed
-            .add(Attributes.ARMOR_TOUGHNESS, 8.0D) // Higher explosion protection
-            .add(Attributes.KNOCKBACK_RESISTANCE, 0.7D) // Good knockback resistance
+            .add(Attributes.MAX_HEALTH, 20.0D)           // 10 hearts (same as player)
+            .add(Attributes.MOVEMENT_SPEED, 0.1D)        // Same as player walk speed
+            .add(Attributes.ARMOR, 0.0D)                 // No base armor (from equipment only)
+            .add(Attributes.ARMOR_TOUGHNESS, 0.0D)       // No base toughness
+            .add(Attributes.KNOCKBACK_RESISTANCE, 0.0D)  // No base knockback resistance
             .add(Attributes.FOLLOW_RANGE, 16.0D)
-            .add(Attributes.ATTACK_DAMAGE, 4.0D)   // Higher damage to fight back
-            .add(Attributes.ARMOR, 8.0D);          // 8 armor points (half of diamond)
+            .add(Attributes.ATTACK_DAMAGE, 1.0D);        // Same as player base damage
     }
 
     // ==================== Goal Selector (Phase 2: Task System) ====================
@@ -734,6 +735,14 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             if (tickCount % 200 == 0) {
                 AutoUpgrader.trySmeltIfNeeded(this);
             }
+            // Auto-sprint: match owner's sprint or combat speed boost
+            if (tickCount % 10 == 0) {
+                updateSprintState();
+            }
+            // Needs check every 30 seconds
+            if (tickCount % 600 == 0) {
+                checkAndReportNeeds();
+            }
         }
 
         // Skill Engine - takes priority over goal system when active
@@ -1023,6 +1032,42 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         } else {
             AICompanionMod.LOGGER.debug("[AutomatonEntity] Auto-equip resumed (backpack closed)");
         }
+    }
+
+    /** Check what the companion needs and notify the owner */
+    private void checkAndReportNeeds() {
+        if (!isAlive() || this.level().isClientSide) return;
+
+        if (gatherModeEnabled) {
+            boolean hasTool = false;
+            for (int i = 0; i < INVENTORY_SIZE; i++) {
+                net.minecraft.world.item.Item it = this.inventory.get(i).getItem();
+                if (it instanceof net.minecraft.world.item.PickaxeItem || it instanceof net.minecraft.world.item.AxeItem) {
+                    hasTool = true; break;
+                }
+            }
+            if (!hasTool) notifyOwner("§e我需要镐子或斧头才能采集资源");
+        }
+        if (guardModeEnabled) {
+            if (getItemBySlot(EquipmentSlot.MAINHAND).isEmpty())
+                notifyOwner("§e我没有武器，战斗能力有限");
+        }
+    }
+
+    /** Auto-sprint: match owner's sprint speed or use sprint when far behind */
+    private void updateSprintState() {
+        var speedAttr = this.getAttribute(Attributes.MOVEMENT_SPEED);
+        if (speedAttr == null) return;
+        double baseSpeed = 0.1 + speedPoints * 0.01;
+        ServerPlayer owner = getOwner();
+        boolean shouldSprint = false;
+        if (owner != null && owner.isSprinting() && this.distanceToSqr(owner) > 16.0) {
+            shouldSprint = true; // Owner is sprinting and companion is far
+        }
+        if (guardModeEnabled && this.getLastHurtByMob() != null) {
+            shouldSprint = true; // In combat
+        }
+        speedAttr.setBaseValue(shouldSprint ? baseSpeed * 1.3 : baseSpeed);
     }
 
     private void tryAutoEat() {
@@ -2451,14 +2496,15 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
      * 在玩家分配点数后调用。
      */
     private void applyStatAllocation() {
-        double baseHealth = 120.0;
-        double baseAttack = 4.0;
-        double baseSpeed = 0.3;
-        double baseArmor = 8.0;
+        // Base stats match a fresh player
+        double baseHealth = 20.0;
+        double baseAttack = 1.0;
+        double baseSpeed = 0.1;
+        double baseArmor = 0.0;
 
         double newHealth = baseHealth + vitalityPoints * 2.0;
-        double newAttack = baseAttack + strengthPoints * 1.0 + (strengthPoints / 5) * 1.0;
-        double newSpeed = baseSpeed + speedPoints * 0.02;
+        double newAttack = baseAttack + strengthPoints * 0.5;
+        double newSpeed = baseSpeed + speedPoints * 0.01;
         double newArmor = baseArmor + defensePoints * 0.5;
 
         var healthAttr = this.getAttribute(Attributes.MAX_HEALTH);
@@ -2873,6 +2919,16 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
      */
     public void showDialogue(String text) {
         showDialogue(text, DEFAULT_DIALOGUE_DURATION_TICKS);
+    }
+
+    /** Send a chat message to the owner player */
+    public void notifyOwner(String msg) {
+        ServerPlayer owner = getOwner();
+        if (owner != null) {
+            String name = this.getCustomName() != null ? this.getCustomName().getString() : "同伴";
+            owner.sendSystemMessage(net.minecraft.network.chat.Component.literal(
+                "§7[§b" + name + "§7] §f" + msg));
+        }
     }
 
     /** Update the persistent name tag showing mode/level when no dialogue is active */

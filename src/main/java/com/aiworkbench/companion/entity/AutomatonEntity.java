@@ -122,6 +122,9 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     private String gatherFilter = "all"; // "all", "ores", "wood"
     private final java.util.Set<String> gatherPriorityResources = new java.util.HashSet<>();
 
+    // ==================== Farm Mode (作物种植) ====================
+    private boolean farmModeEnabled = false;
+
     // ==================== 感知缓存（避免重复O(n³)扫描） ====================
     private PerceptionEngine.PerceptionData cachedPerception;
     private long lastPerceptionTick;
@@ -458,6 +461,9 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
 
         // 3: Gather goal - smart resource gathering (ores + logs, when gatherModeEnabled)
         this.goalSelector.addGoal(3, new com.aiworkbench.companion.entity.goal.CompanionGatherGoal(this, 0.8, 8.0F));
+
+        // 4: Farm goal - crop harvesting + replanting (when farmModeEnabled)
+        this.goalSelector.addGoal(4, new com.aiworkbench.companion.entity.goal.CompanionFarmGoal(this, 0.7));
 
         // 5: Follow owner when too far away
         // minDistance=2 blocks (stop), maxDistance=16 blocks (follow)
@@ -1571,6 +1577,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             switch (mode) {
                 case "guard" -> guardModeEnabled = true;
                 case "gather" -> gatherModeEnabled = true;
+                case "farm" -> farmModeEnabled = true;
                 case "patrol" -> patrolModeEnabled = true;
                 default -> followModeActive = true;
             }
@@ -1633,6 +1640,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         // Save mode flags explicitly (defensive against WorkingMode loss)
         tag.putBoolean("GuardMode", guardModeEnabled);
         tag.putBoolean("GatherMode", gatherModeEnabled);
+        tag.putBoolean("FarmMode", farmModeEnabled);
         tag.putBoolean("PatrolMode", patrolModeEnabled);
         tag.putBoolean("FollowModeActive", followModeActive);
         tag.putBoolean("AutonomousMode", autonomousMode);
@@ -1755,28 +1763,31 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     public boolean toggleFollowMode() {
         if (modeToggleCooldown > 0) return followModeActive; // 防抖
         modeToggleCooldown = MODE_TOGGLE_COOLDOWN_TICKS;
-        // Mode cycle: follow -> guard -> gather -> follow
+        // Mode cycle: follow -> guard -> gather -> farm -> follow
         if (followModeActive) {
             setGuardModeEnabled(true);
             setGatherModeEnabled(false);
+            setFarmModeEnabled(false);
             followModeActive = false;
             this.entityData.set(DATA_WORKING_MODE, "guard");
             showDialogue("切换到守护模式", 60);
-            AICompanionMod.LOGGER.info("[AutomatonEntity] V key: Switched to guard mode");
         } else if (guardModeEnabled) {
             setGuardModeEnabled(false);
             setGatherModeEnabled(true);
+            setFarmModeEnabled(false);
             this.entityData.set(DATA_WORKING_MODE, "gather");
             showDialogue("切换到采集模式", 60);
-            AICompanionMod.LOGGER.info("[AutomatonEntity] V key: Switched to gather mode");
-        } else {
-            // gather -> follow (or fallback)
+        } else if (gatherModeEnabled) {
             setGuardModeEnabled(false);
             setGatherModeEnabled(false);
+            setFarmModeEnabled(true);
+            this.entityData.set(DATA_WORKING_MODE, "farm");
+            showDialogue("切换到种植模式", 60);
+        } else {
+            setFarmModeEnabled(false);
             followModeActive = true;
             this.entityData.set(DATA_WORKING_MODE, "follow");
             showDialogue("切换到跟随模式", 60);
-            AICompanionMod.LOGGER.info("[AutomatonEntity] V key: Switched to follow mode");
         }
         playModeSwitchSound();
         animateSwing();
@@ -2200,6 +2211,22 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         }
     }
 
+    // ==================== Farm Mode ====================
+
+    public boolean isFarmModeEnabled() { return farmModeEnabled; }
+
+    public void setFarmModeEnabled(boolean enabled) {
+        playModeSwitchSound();
+        this.farmModeEnabled = enabled;
+        if (enabled) {
+            setGuardModeEnabled(false);
+            setGatherModeEnabled(false);
+            followModeActive = false;
+        }
+        this.entityData.set(DATA_WORKING_MODE, enabled ? "farm" : getModeDataString());
+        animateSwing();
+    }
+
     // ==================== Item Collection ====================
 
     /**
@@ -2278,6 +2305,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     private String getModeDataString() {
         if (guardModeEnabled) return "guard";
         if (gatherModeEnabled) return "gather";
+        if (farmModeEnabled) return "farm";
         if (followModeActive) return "follow";
         return "follow";
     }

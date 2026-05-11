@@ -29,6 +29,8 @@ public class CompanionBehaviorCommands {
                                 .then(Commands.argument("resources", StringArgumentType.greedyString())
                                         .executes(ctx -> setGatherPriority(ctx.getSource(),
                                                 StringArgumentType.getString(ctx, "resources"))))))
+                .then(Commands.literal("farm")
+                        .executes(ctx -> toggleFarm(ctx.getSource())))
                 .then(Commands.literal("mine")
                         .executes(ctx -> toggleMine(ctx.getSource())))
                 .then(Commands.literal("chop")
@@ -299,6 +301,24 @@ public class CompanionBehaviorCommands {
         c.setGatherModeEnabled(true);
         source.sendSuccess(() -> Component.literal("§a采集模式已开启（测试模式，含完整日志）"), false);
         source.sendSuccess(() -> Component.literal("§7查看日志: tail -f logs/latest.log | grep GatherGoal"), false);
+        return 1;
+    }
+
+    private static int toggleFarm(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) { source.sendFailure(Component.literal("必须由玩家执行")); return 0; }
+
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("你没有同伴"));
+            return 0;
+        }
+
+        boolean enabled = !companion.isFarmModeEnabled();
+        companion.setFarmModeEnabled(enabled);
+        source.sendSuccess(() -> Component.literal(enabled
+                ? "§a🌾 种植模式开启 — 同伴将自动收割和补种作物"
+                : "§7种植模式已关闭"), true);
         return 1;
     }
 

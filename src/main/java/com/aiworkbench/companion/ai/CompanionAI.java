@@ -51,6 +51,7 @@ public class CompanionAI {
         + "- lookAtOwner: 看向主人\n"
         + "- moveForward: 向前移动\n"
         + "- gather: 开启资源采集模式（自动挖矿+砍树）\n"
+        + "- farm: 开启种植模式（自动收割成熟作物+补种）\n"
         + "\n重要规则：\n"
         + "1. 任何任务/行动请求 → 必须输出 [SKILL:技能名]\n"
         + "2. 纯聊天/问问题 → 正常中文回复，不要加 [SKILL:]\n"
@@ -60,9 +61,11 @@ public class CompanionAI {
         + "6. 如需创建新技能，用 [GENERATE:简短描述]\n"
         + "7. 采集/挖矿/砍树/收集资源 → 都用 [SKILL:gather]\n"
         + "8. 需要优先采集特定资源时：用 [GATHER:铁,钻石] 格式\n"
+        + "9. 收割/种地/种植作物 → 都用 [SKILL:farm]\n"
         + "\n示例：\n"
         + "主人：挖点铁矿 → 好的！[SKILL:gather]\n"
         + "主人：帮我找钻石 → 马上去找钻石！[GATHER:钻石] [SKILL:gather]\n"
+        + "主人：帮我收庄稼 → 好的！[SKILL:farm]\n"
         + "主人：你好 → 主人好呀！今天天气不错~";
 
     public CompanionAI(String companionId, String ownerName) {

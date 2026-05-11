@@ -30,47 +30,57 @@ public class CompanionQuickMenuScreen extends Screen {
         AutomatonEntity c = CompanionClientState.getCompanion();
         boolean gathering = c != null && c.isGatherModeEnabled();
         boolean guarding = c != null && c.isGuardModeEnabled();
+        boolean farming = c != null && c.isFarmModeEnabled();
 
+        int btnW = 140, btnH = 20, gap = 2;
+        int y = cy;
         // 标题
         addRenderableWidget(Button.builder(Component.literal("§6§l同伴操作"), btn -> {})
-            .bounds(cx - 50, cy, 100, 16).build());
+            .bounds(cx - 50, y, 100, 14).build());
+        y += 16;
 
         // 采集模式
         addRenderableWidget(Button.builder(
-            Component.literal(gathering ? "§6⛏ 采集中（点击停止）" : "§7⛏ 开始采集"),
-            btn -> {
-                sendCmd("companion gather");
-                this.onClose();
-            }).bounds(cx - 70, cy + 22, 140, 22).build());
+            Component.literal(gathering ? "§6⛏ 采集中" : "§7⛏ 开始采集"),
+            btn -> { sendCmd("companion gather"); this.onClose(); }
+        ).bounds(cx - btnW/2, y, btnW, btnH).build());
+        y += btnH + gap;
+
+        // 种植模式
+        addRenderableWidget(Button.builder(
+            Component.literal(farming ? "§a🌾 种植中" : "§7🌾 开始种植"),
+            btn -> { sendCmd("companion farm"); this.onClose(); }
+        ).bounds(cx - btnW/2, y, btnW, btnH).build());
+        y += btnH + gap;
 
         // 守护模式
         addRenderableWidget(Button.builder(
-            Component.literal(guarding ? "§c🛡 守护中（点击停止）" : "§7🛡 守护模式"),
-            btn -> {
-                sendCmd("companion guard");
-                this.onClose();
-            }).bounds(cx - 70, cy + 48, 140, 22).build());
+            Component.literal(guarding ? "§c🛡 守护中" : "§7🛡 守护模式"),
+            btn -> { sendCmd("companion guard"); this.onClose(); }
+        ).bounds(cx - btnW/2, y, btnW, btnH).build());
+        y += btnH + gap;
 
         // 背包
         addRenderableWidget(Button.builder(Component.literal("§e🎒 打开背包"), btn -> {
-            sendCmd("companion openinv");
-            this.onClose();
-        }).bounds(cx - 70, cy + 74, 140, 22).build());
+            sendCmd("companion openinv"); this.onClose();
+        }).bounds(cx - btnW/2, y, btnW, btnH).build());
+        y += btnH + gap;
 
         // 传送
         addRenderableWidget(Button.builder(Component.literal("§b📍 传送到我"), btn -> {
-            sendCmd("companion teleport");
-            this.onClose();
-        }).bounds(cx - 70, cy + 100, 140, 22).build());
+            sendCmd("companion teleport"); this.onClose();
+        }).bounds(cx - btnW/2, y, btnW, btnH).build());
+        y += btnH + gap;
 
         // 设置
         addRenderableWidget(Button.builder(Component.literal("§d⚙ 同伴设置"), btn -> {
             this.minecraft.setScreen(new CompanionSettingsScreen(parent));
-        }).bounds(cx - 70, cy + 126, 140, 22).build());
+        }).bounds(cx - btnW/2, y, btnW, btnH).build());
+        y += btnH + gap + 4;
 
         // 取消
         addRenderableWidget(Button.builder(Component.literal("§7关闭"), btn -> onClose())
-            .bounds(cx - 30, cy + 158, 60, 18).build());
+            .bounds(cx - 30, y, 60, 16).build());
     }
 
     @Override

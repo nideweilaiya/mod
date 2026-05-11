@@ -60,6 +60,19 @@ public class CompanionAICommands {
         Map.entry("砍木头",   "gather"),
         Map.entry("伐木",     "gather"),
         Map.entry("砍柴",     "gather"),
+        // 种植类 → 开启种植模式 (farm)
+        Map.entry("收割",     "farm"),
+        Map.entry("种地",     "farm"),
+        Map.entry("种田",     "farm"),
+        Map.entry("种植",     "farm"),
+        Map.entry("耕地",     "farm"),
+        Map.entry("收菜",     "farm"),
+        Map.entry("收小麦",   "farm"),
+        Map.entry("收胡萝卜", "farm"),
+        Map.entry("收土豆",   "farm"),
+        Map.entry("农场",     "farm"),
+        Map.entry("收割庄稼", "farm"),
+        Map.entry("种菜",     "farm"),
         // 战斗类
         Map.entry("打僵尸",   "fightZombie"),
         Map.entry("战斗",     "fightZombie"),
@@ -359,6 +372,13 @@ public class CompanionAICommands {
             companion.setGatherModeEnabled(true);
             player.sendSystemMessage(Component.literal("§6⛏ 已开启智能采集模式"));
             companion.showDialogue("§6开始采集资源！", 60);
+            return true;
+        }
+        // "farm" 是特殊动作：开启种植模式
+        if ("farm".equals(skillName)) {
+            companion.setFarmModeEnabled(true);
+            player.sendSystemMessage(Component.literal("§a🌾 已开启种植模式"));
+            companion.showDialogue("§a开始收割庄稼！", 60);
             return true;
         }
 

@@ -23,6 +23,8 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.ai.goal.LookAtPlayerGoal;
@@ -85,6 +87,8 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         SynchedEntityData.defineId(AutomatonEntity.class, EntityDataSerializers.INT);
     private static final EntityDataAccessor<Integer> DATA_DEFENSE_POINTS =
         SynchedEntityData.defineId(AutomatonEntity.class, EntityDataSerializers.INT);
+    private static final EntityDataAccessor<String> DATA_ACTION_TEXT =
+        SynchedEntityData.defineId(AutomatonEntity.class, EntityDataSerializers.STRING);
     private int strengthPoints = 0;   // 攻击力
     private int vitalityPoints = 0;   // 生命值
     private int speedPoints = 0;      // 移动速度
@@ -427,6 +431,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         this.entityData.define(DATA_VITALITY_POINTS, 0);
         this.entityData.define(DATA_SPEED_POINTS, 0);
         this.entityData.define(DATA_DEFENSE_POINTS, 0);
+        this.entityData.define(DATA_ACTION_TEXT, "");
     }
 
     // ==================== Attribute Supplier ====================
@@ -739,6 +744,10 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             if (tickCount % 10 == 0) {
                 updateSprintState();
             }
+            // Tool acquisition every 5 seconds
+            if (tickCount % 100 == 0) {
+                tryAcquireTool();
+            }
             // Needs check every 30 seconds
             if (tickCount % 600 == 0) {
                 checkAndReportNeeds();
@@ -1033,6 +1042,69 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             AICompanionMod.LOGGER.debug("[AutomatonEntity] Auto-equip resumed (backpack closed)");
         }
     }
+
+    /** Auto-craft needed tools from available materials */
+    private void tryAcquireTool() {
+        if (!isAlive() || this.level().isClientSide) return;
+        ItemStack mainhand = getItemBySlot(EquipmentSlot.MAINHAND);
+        boolean needsTool = false;
+        if (gatherModeEnabled) {
+            if (!(mainhand.getItem() instanceof net.minecraft.world.item.PickaxeItem)
+                && !(mainhand.getItem() instanceof net.minecraft.world.item.AxeItem))
+                needsTool = true;
+        }
+        if (!needsTool) return;
+        for (int i = 0; i < INVENTORY_SIZE; i++) {
+            net.minecraft.world.item.Item it = this.inventory.get(i).getItem();
+            if (it instanceof net.minecraft.world.item.PickaxeItem || it instanceof net.minecraft.world.item.AxeItem) {
+                ItemStack tool = this.inventory.get(i).copy();
+                this.inventory.set(i, mainhand.copy());
+                setItemSlot(EquipmentSlot.MAINHAND, tool);
+                animateSwing();
+                return;
+            }
+        }
+        if (tryCraftPickaxe(Items.WOODEN_PICKAXE, "木镐") || tryCraftPickaxe(Items.STONE_PICKAXE, "石镐")) return;
+        int logs = countLogs(), planks = countPlanksItems(), sticks = countItems("stick");
+        if (logs == 0 && planks < 3) notifyOwner("§e缺原木来合成木镐");
+        else if (sticks < 2) notifyOwner("§e缺木棍（需" + (2-sticks) + "根）");
+        else notifyOwner("§e缺木板（需" + (3-planks) + "块）");
+    }
+
+    private boolean tryCraftPickaxe(net.minecraft.world.item.Item target, String name) {
+        int planks = countPlanksItems(), sticks = countItems("stick");
+        boolean hasCT = countItem(Items.CRAFTING_TABLE) > 0;
+        if (target == Items.WOODEN_PICKAXE) {
+            int need = hasCT ? 3 : 7;
+            if (planks < need) { int logs = countLogs(); if (logs > 0) { consumeLogs(1); addPlanks(4); planks += 4; } else return false; }
+            if (sticks < 2) { if (planks >= 2) { consumePlanksItems(2); addSticks(4); sticks += 4; planks -= 2; } else return false; }
+            if (!hasCT && planks >= 4) { consumePlanksItems(4); addItemToInventory(new ItemStack(Items.CRAFTING_TABLE)); planks -= 4; hasCT = true; }
+            if (!hasCT || planks < 3 || sticks < 2) return false;
+            consumePlanksItems(3); consumeStickCount(2);
+            addItemToInventory(new ItemStack(Items.WOODEN_PICKAXE));
+            notifyOwner("§a合成了" + name + "！"); animateSwing();
+            return true;
+        }
+        if (target == Items.STONE_PICKAXE) {
+            if (!hasCT || countItem(Items.COBBLESTONE) < 3 || sticks < 2) return false;
+            consumeFromInventory(Items.COBBLESTONE, 3); consumeStickCount(2);
+            addItemToInventory(new ItemStack(Items.STONE_PICKAXE));
+            notifyOwner("§a合成了" + name + "！"); animateSwing();
+            return true;
+        }
+        return false;
+    }
+
+    private int countLogs() { int c = 0; for (int i = 0; i < INVENTORY_SIZE; i++) { String n = this.inventory.get(i).getItem().builtInRegistryHolder().key().location().getPath(); if (n.contains("_log") || n.contains("_stem")) c += this.inventory.get(i).getCount(); } return c; }
+    private int countPlanksItems() { int c = 0; for (int i = 0; i < INVENTORY_SIZE; i++) { String n = this.inventory.get(i).getItem().builtInRegistryHolder().key().location().getPath(); if (n.contains("_planks")) c += this.inventory.get(i).getCount(); } return c; }
+    private int countItems(String type) { if ("stick".equals(type)) return countItem(Items.STICK); if ("cobblestone".equals(type)) return countItem(Items.COBBLESTONE); return 0; }
+    private int countItem(net.minecraft.world.item.Item item) { int c = 0; for (int i = 0; i < INVENTORY_SIZE; i++) { if (this.inventory.get(i).getItem() == item) c += this.inventory.get(i).getCount(); } return c; }
+    private void consumeLogs(int count) { int r = count; for (int i = 0; i < INVENTORY_SIZE && r > 0; i++) { String n = this.inventory.get(i).getItem().builtInRegistryHolder().key().location().getPath(); if (n.contains("_log") || n.contains("_stem")) { int t = Math.min(r, this.inventory.get(i).getCount()); this.inventory.get(i).shrink(t); r -= t; if (this.inventory.get(i).isEmpty()) this.inventory.set(i, ItemStack.EMPTY); } } }
+    private void consumePlanksItems(int count) { int r = count; for (int i = 0; i < INVENTORY_SIZE && r > 0; i++) { String n = this.inventory.get(i).getItem().builtInRegistryHolder().key().location().getPath(); if (n.contains("_planks")) { int t = Math.min(r, this.inventory.get(i).getCount()); this.inventory.get(i).shrink(t); r -= t; if (this.inventory.get(i).isEmpty()) this.inventory.set(i, ItemStack.EMPTY); } } }
+    private void consumeStickCount(int count) { consumeFromInventory(Items.STICK, count); }
+    private void consumeFromInventory(net.minecraft.world.item.Item item, int count) { int r = count; for (int i = 0; i < INVENTORY_SIZE && r > 0; i++) { if (this.inventory.get(i).getItem() == item) { int t = Math.min(r, this.inventory.get(i).getCount()); this.inventory.get(i).shrink(t); r -= t; if (this.inventory.get(i).isEmpty()) this.inventory.set(i, ItemStack.EMPTY); } } }
+    private void addPlanks(int count) { addItemToInventory(new ItemStack(Items.OAK_PLANKS, count)); }
+    private void addSticks(int count) { addItemToInventory(new ItemStack(Items.STICK, count)); }
 
     /** Check what the companion needs and notify the owner */
     private void checkAndReportNeeds() {
@@ -2618,6 +2690,8 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     public int getVitalityPoints() { return this.entityData.get(DATA_VITALITY_POINTS); }
     public int getSpeedPoints() { return this.entityData.get(DATA_SPEED_POINTS); }
     public int getDefensePoints() { return this.entityData.get(DATA_DEFENSE_POINTS); }
+    public String getActionText() { return this.entityData.get(DATA_ACTION_TEXT); }
+    public void setActionText(String text) { this.entityData.set(DATA_ACTION_TEXT, text); }
 
     public void resetAllStats() {
         strengthPoints = 0;

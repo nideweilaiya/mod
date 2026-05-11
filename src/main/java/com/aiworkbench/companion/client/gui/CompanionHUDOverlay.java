@@ -131,22 +131,28 @@ public class CompanionHUDOverlay {
             textY += LINE_HEIGHT + XP_BAR_HEIGHT;
             String mode = companion.getWorkingMode();
             String modeDisplay = switch (mode) {
-                case "guard" -> "§cGuard";
-                case "mine" -> "§bMine";
-                case "chop" -> "§6Chop";
-                case "patrol" -> "§7Patrol";
-                default -> "§aFollow";
+                case "guard" -> "§c🛡 守护";
+                case "gather" -> "§6⛏ 采集";
+                case "farm" -> "§a🌾 种植";
+                case "patrol" -> "§7巡逻";
+                default -> "§b👤 跟随";
             };
-            graphics.drawString(mc.font, "Mode: " + modeDisplay, textX, textY, 0xFFFFFF, false);
+            graphics.drawString(mc.font, modeDisplay, textX, textY, 0xFFFFFF, false);
 
-            // Line 4: Distance
+            // Line 4: Current action (what is companion targeting)
+            textY += LINE_HEIGHT;
+            String action = companion.getActionText();
+            if (action != null && !action.isEmpty()) {
+                graphics.drawString(mc.font, "§7→ " + action, textX, textY, 0xAAAAAA, false);
+            } else {
+                graphics.drawString(mc.font, "§7→ 待命中", textX, textY, 0x666666, false);
+            }
+
+            // Line 5: Distance
             textY += LINE_HEIGHT;
             double dist = Math.sqrt(player.distanceToSqr(companion));
-            String distColor;
-            if (dist > 20) distColor = "§c";
-            else if (dist > 10) distColor = "§e";
-            else distColor = "§a";
-            graphics.drawString(mc.font, "Dist: " + distColor + String.format("%.1f", dist) + "m",
+            String distColor = dist > 20 ? "§c" : (dist > 10 ? "§e" : "§a");
+            graphics.drawString(mc.font, "§7距离: " + distColor + String.format("%.1f", dist) + "m",
                 textX, textY, 0xFFFFFF, false);
         } catch (Exception e) {
             AICompanionMod.LOGGER.error("[HUD] Render error: " + e.getMessage());

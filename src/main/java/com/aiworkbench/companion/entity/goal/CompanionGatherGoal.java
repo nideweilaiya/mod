@@ -188,6 +188,19 @@ public class CompanionGatherGoal extends Goal {
         }
 
         // === 走路/挖掘 ===
+        // Update action display
+        if (target != null && !companion.level().getBlockState(target).isAir()) {
+            String name = companion.level().getBlockState(target).getBlock()
+                .builtInRegistryHolder().key().location().getPath();
+            companion.setActionText("⛏ " + name.replace("_", " "));
+        }
+
+        if (target != null && !companion.level().getBlockState(target).isAir()) {
+            String name = companion.level().getBlockState(target).getBlock()
+                .builtInRegistryHolder().key().location().getPath();
+            companion.setActionText("⛏ " + name.replace("_", " "));
+        }
+
         Vec3 center = Vec3.atCenterOf(target);
         double distSq = companion.distanceToSqr(center.x, center.y, center.z);
         companion.getLookControl().setLookAt(center.x, center.y, center.z);

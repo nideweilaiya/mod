@@ -108,6 +108,13 @@ public class MoveToBlockAction implements AtomicAction {
     }
 
     @Override
+    public void reset() {
+        target = null;
+        tickCounter = 0;
+        searched = false;
+    }
+
+    @Override
     public String getDescription() {
         return "搜索目标位置";
     }

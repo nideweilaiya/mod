@@ -20,6 +20,7 @@ import java.util.UUID;
  *   /companion skill info <name>    — 查看技能详情
  *   /companion skill learn <name>   — 学习/执行技能
  *   /companion skill cancel         — 取消当前技能
+ *   /companion skill feedback       — 查看最近技能反馈和验证结果
  * <p>
  * 需要 OP：
  *   /companion skill forget <name>  — 遗忘技能
@@ -49,6 +50,9 @@ public class SkillCommand {
         skillBase.then(Commands.literal("cancel")
                 .executes(ctx -> cancelSkill(ctx.getSource())));
 
+        skillBase.then(Commands.literal("feedback")
+                .executes(ctx -> showFeedback(ctx.getSource())));
+
         // === 需要 OP 的子命令（permission level 2）===
         skillBase.then(Commands.literal("forget")
                 .requires(src -> src.hasPermission(2))
@@ -64,6 +68,17 @@ public class SkillCommand {
                 .then(Commands.argument("description", StringArgumentType.greedyString())
                         .executes(ctx -> generateSkill(ctx.getSource(),
                                 StringArgumentType.getString(ctx, "description")))));
+
+        // === 语义搜索（无需 OP，使用 VectorSkillLibrary）===
+        skillBase.then(Commands.literal("search")
+                .then(Commands.argument("description", StringArgumentType.greedyString())
+                        .executes(ctx -> searchSkill(ctx.getSource(),
+                                StringArgumentType.getString(ctx, "description")))));
+
+        // === 重建嵌入索引（OP）===
+        skillBase.then(Commands.literal("reindex")
+                .requires(src -> src.hasPermission(2))
+                .executes(ctx -> reindexSkills(ctx.getSource())));
 
         parent.then(skillBase);
     }
@@ -213,6 +228,74 @@ public class SkillCommand {
         return 1;
     }
 
+    /** 查看最近一次技能执行的反馈和验证结果 */
+    private static int showFeedback(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) return 0;
+
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null) {
+            player.sendSystemMessage(Component.literal("§7你还没有同伴"));
+            return 0;
+        }
+
+        SkillEngine engine = companion.getSkillEngine();
+        FeedbackCollector.SkillFeedback feedback = engine.getLastFeedback();
+
+        if (feedback == null) {
+            player.sendSystemMessage(Component.literal("§7还没有技能执行记录，先让同伴执行一个技能吧"));
+            return 0;
+        }
+
+        player.sendSystemMessage(Component.literal("§6§l--- 最近技能反馈 ---"));
+        player.sendSystemMessage(Component.literal(" §b技能: §f" + feedback.skillName));
+
+        // 简化结果
+        if (feedback.failureReason == FeedbackCollector.FailureReason.SUCCESS) {
+            player.sendSystemMessage(Component.literal(" §a结果: ✓ 成功"));
+        } else if (feedback.failureReason == FeedbackCollector.FailureReason.INTERRUPTED) {
+            player.sendSystemMessage(Component.literal(" §e结果: ⚠ 被中断"));
+        } else {
+            player.sendSystemMessage(Component.literal(" §c结果: ✗ 失败 - " + feedback.failureReason.getDescription()));
+        }
+
+        // 执行耗时
+        double seconds = feedback.executionTicks / 20.0;
+        player.sendSystemMessage(Component.literal(" §7耗时: " + String.format("%.1f", seconds) + "秒"));
+
+        // 收获总结
+        int brokenCount = feedback.brokenBlocks.values().stream().mapToInt(Integer::intValue).sum();
+        int collectedCount = feedback.collectedItems.values().stream().mapToInt(Integer::intValue).sum();
+        if (brokenCount > 0 || collectedCount > 0) {
+            StringBuilder summary = new StringBuilder(" §7完成: ");
+            if (brokenCount > 0) summary.append("破坏").append(brokenCount).append("个方块 ");
+            if (collectedCount > 0) summary.append("收集").append(collectedCount).append("个物品");
+            player.sendSystemMessage(Component.literal(summary.toString()));
+        }
+
+        // LLM验证
+        SkillVerifier.VerificationResult verification = engine.getLastVerification();
+        if (verification != null) {
+            if (verification.success) {
+                player.sendSystemMessage(Component.literal(" §aAI验证: 通过 ✓"));
+            } else {
+                player.sendSystemMessage(Component.literal(" §eAI评价: " + truncate(verification.critique, 80)));
+            }
+            if (verification.suggestion != null && !verification.suggestion.isEmpty()) {
+                player.sendSystemMessage(Component.literal(" §7建议: " + truncate(verification.suggestion, 80)));
+            }
+        } else {
+            player.sendSystemMessage(Component.literal(" §7(AI验证结果尚未返回)"));
+        }
+
+        return 1;
+    }
+
+    private static String truncate(String s, int maxLen) {
+        if (s == null) return "";
+        return s.length() <= maxLen ? s : s.substring(0, maxLen - 3) + "...";
+    }
+
     /** 遗忘技能（OP） */
     private static int forgetSkill(CommandSourceStack source, String name) {
         ServerPlayer player = source.getPlayer();
@@ -293,6 +376,110 @@ public class SkillCommand {
         }, context -> {
             if (player.getServer() != null) {
                 player.getServer().execute((Runnable) context);
+            }
+        });
+
+        return 1;
+    }
+
+    /** 语义搜索技能 */
+    private static int searchSkill(CommandSourceStack source, String description) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) return 0;
+
+        SkillLibrary lib = getLibrary();
+        if (lib == null) return 0;
+
+        VectorSkillLibrary vectorLib = lib.getVectorLibrary();
+        if (vectorLib == null) {
+            player.sendSystemMessage(Component.literal("§c向量技能库未初始化"));
+            return 0;
+        }
+
+        player.sendSystemMessage(Component.literal("§6§l=== 语义搜索: §f" + description + " §6§l==="));
+        player.sendSystemMessage(Component.literal("§7正在计算嵌入向量并检索...（请稍候）"));
+
+        UUID uuid = player.getUUID();
+        List<VectorSkillLibrary.SkillScore> scores = vectorLib.searchSimilar(description, uuid, 5);
+
+        if (scores.isEmpty()) {
+            player.sendSystemMessage(Component.literal("§c未找到匹配技能。"));
+            player.sendSystemMessage(Component.literal("§7提示：确保 Ollama 正在运行（nomic-embed-text 模型）。"));
+            player.sendSystemMessage(Component.literal("§7使用 §f/companion skill reindex §7可重建索引。"));
+            return 1;
+        }
+
+        player.sendSystemMessage(Component.literal("§a找到 " + scores.size() + " 个匹配技能："));
+        for (int i = 0; i < scores.size(); i++) {
+            VectorSkillLibrary.SkillScore score = scores.get(i);
+            String percentage = String.format("%.0f%%", score.similarity * 100);
+            String bar = getScoreBar(score.similarity);
+
+            // 尝试解析为 Skill 对象获取更多信息
+            Skill skill = lib.getPreset(score.skillName);
+            if (skill == null) {
+                skill = lib.getPlayerSkill(uuid, score.skillName);
+            }
+
+            String skillName = score.skillName;
+            String suffix = "";
+            if (skill != null) {
+                String cat = skill.getCategory().getDisplayName();
+                suffix = " §7[" + cat + "]";
+            }
+
+            player.sendSystemMessage(Component.literal(
+                " §e" + (i + 1) + ". " + skillName + suffix + " §8" + bar + " §b" + percentage));
+        }
+
+        player.sendSystemMessage(Component.literal("§7使用 §f/companion skill learn <技能名> §7执行技能"));
+        return 1;
+    }
+
+    /** 用 BAR 可视化相似度 */
+    private static String getScoreBar(double score) {
+        int bars = (int) Math.round(score * 10);
+        StringBuilder sb = new StringBuilder("§a");
+        for (int i = 0; i < 10; i++) {
+            if (i < bars) {
+                sb.append("█");
+            } else {
+                sb.append("§8░");
+            }
+        }
+        return sb.toString();
+    }
+
+    /** 重建所有技能的嵌入索引（OP） */
+    private static int reindexSkills(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) return 0;
+
+        SkillLibrary lib = getLibrary();
+        if (lib == null) return 0;
+
+        int presetCount = lib.getAllPresets().size();
+        player.sendSystemMessage(Component.literal("§e正在为 " + presetCount + " 个预制技能重建嵌入向量...（请稍候）"));
+
+        // 在后台线程执行（可能耗时较长，需要调用 Ollama API）
+        java.util.concurrent.CompletableFuture.runAsync(() -> {
+            try {
+                lib.reindexAllPresets();
+                int indexed = lib.getVectorLibrary().getIndexedSkillNames().size();
+                // 回到服务器线程发送结果
+                if (player.getServer() != null) {
+                    player.getServer().execute(() -> {
+                        player.sendSystemMessage(Component.literal(
+                            "§a✅ 嵌入索引重建完成！已索引 " + indexed + "/" + presetCount + " 个技能"));
+                    });
+                }
+            } catch (Exception e) {
+                AICompanionMod.LOGGER.error("[SkillCmd] Reindex error: {}", e.getMessage());
+                if (player.getServer() != null) {
+                    player.getServer().execute(() -> {
+                        player.sendSystemMessage(Component.literal("§c重建索引失败: " + e.getMessage()));
+                    });
+                }
             }
         });
 

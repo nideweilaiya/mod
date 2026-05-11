@@ -67,6 +67,11 @@ public class LookAtAction implements AtomicAction {
     }
 
     @Override
+    public void reset() {
+        elapsedTicks = 0;
+    }
+
+    @Override
     public String getDescription() {
         return lookAtOwner ? "看向主人" : "注视";
     }

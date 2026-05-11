@@ -68,7 +68,7 @@ sourceSets {
 }
 
 dependencies {
-    minecraft 'net.minecraftforge:forge:1.20.4-49.0.30'
+    minecraft 'net.minecraftforge:forge:1.20.4-49.2.7'
     implementation 'com.mojang:authlib:6.0.52'
 
     // Test dependencies

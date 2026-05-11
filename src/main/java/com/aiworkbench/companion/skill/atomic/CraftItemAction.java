@@ -174,6 +174,12 @@ public class CraftItemAction implements AtomicAction {
     }
 
     @Override
+    public void reset() {
+        remainingCrafts = craftCount;
+        done = false;
+    }
+
+    @Override
     public String getDescription() {
         return "合成物品";
     }

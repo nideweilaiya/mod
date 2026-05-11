@@ -82,11 +82,10 @@ public class CompanionWanderGoal extends Goal {
 
     @Override
     public void tick() {
-        // Nothing needed - navigation handles movement
-        // Just check if we should stop because owner got close
         Player owner = getOwnerInDimension();
         if (owner != null && companion.distanceTo(owner) < 6.0) {
             companion.getNavigation().stop();
+            companion.getLookControl().setLookAt(owner, 5.0F, 10.0F);
         }
     }
 }

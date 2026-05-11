@@ -160,9 +160,11 @@ public class PlayerEventHandler {
 
                 // 潜行+右键 → 打开同伴背包 Container
                 if (player.isShiftKeyDown()) {
-                    com.aiworkbench.companion.inventory.CompanionContainer.setPendingCompanion(
-                        player.getUUID(), companion);
-                    player.openMenu(companion);
+                    player.openMenu(new net.minecraft.world.SimpleMenuProvider(
+                        (containerId, inv, p) ->
+                            new com.aiworkbench.companion.inventory.CompanionContainer(
+                                containerId, inv, companion.getId()),
+                        companion.getDisplayName()));
                 }
 
                 // 标记事件已处理
@@ -265,8 +267,8 @@ public class PlayerEventHandler {
 
     // ==================== 持久化 NBT 标签 ====================
 
-    private static final String TAG_COMPANION_UUID = "aicompanion.companion_uuid_most";
-    private static final String TAG_COMPANION_UUID_LSB = "aicompanion.companion_uuid_least";
+    private static final String TAG_COMPANION_UUID = "aicompanion.companion_uuid";
+    private static final String TAG_COMPANION_UUID_OLD = "aicompanion.companion_uuid_most"; // 旧格式兼容
     private static final String TAG_COMPANION_DIM = "aicompanion.companion_dim";
     private static final String TAG_COMPANION_X = "aicompanion.companion_x";
     private static final String TAG_COMPANION_Y = "aicompanion.companion_y";
@@ -443,6 +445,9 @@ public class PlayerEventHandler {
         data.putDouble(TAG_COMPANION_Y, companion.getY());
         data.putDouble(TAG_COMPANION_Z, companion.getZ());
         data.putString(TAG_COMPANION_DIM, companion.level().dimension().location().toString());
+        // 清除旧格式的残留键（迁移到新格式）
+        data.remove(TAG_COMPANION_UUID_OLD + "Most");
+        data.remove(TAG_COMPANION_UUID_OLD + "Least");
     }
 
     /**
@@ -450,8 +455,12 @@ public class PlayerEventHandler {
      */
     private void clearCompanionFromPlayerNBT(ServerPlayer player) {
         CompoundTag data = player.getPersistentData();
-        data.remove(TAG_COMPANION_UUID);
-        data.remove(TAG_COMPANION_UUID_LSB);
+        // 清除新格式
+        data.remove(TAG_COMPANION_UUID + "Most");
+        data.remove(TAG_COMPANION_UUID + "Least");
+        // 清除旧格式残留
+        data.remove(TAG_COMPANION_UUID_OLD + "Most");
+        data.remove(TAG_COMPANION_UUID_OLD + "Least");
         data.remove(TAG_COMPANION_X);
         data.remove(TAG_COMPANION_Y);
         data.remove(TAG_COMPANION_Z);
@@ -466,12 +475,18 @@ public class PlayerEventHandler {
     @javax.annotation.Nullable
     private AutomatonEntity loadCompanionFromPlayerNBT(ServerPlayer player) {
         CompoundTag data = player.getPersistentData();
-        if (!data.hasUUID(TAG_COMPANION_UUID)) {
-            return null;
+        // 兼容旧存档：先查新键名，再查旧键名
+        String uuidKey = TAG_COMPANION_UUID;
+        if (!data.hasUUID(uuidKey)) {
+            if (data.hasUUID(TAG_COMPANION_UUID_OLD)) {
+                uuidKey = TAG_COMPANION_UUID_OLD;
+            } else {
+                return null;
+            }
         }
         if (!data.contains(TAG_COMPANION_DIM)) return null;
 
-        UUID companionUUID = data.getUUID(TAG_COMPANION_UUID);
+        UUID companionUUID = data.getUUID(uuidKey);
         String dimStr = data.getString(TAG_COMPANION_DIM);
 
         // 找到正确维度

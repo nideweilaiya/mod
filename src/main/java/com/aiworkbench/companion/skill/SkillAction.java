@@ -55,9 +55,12 @@ public class SkillAction {
         }
     }
 
-    /** 开始执行（从第一步开始） */
+    /** 开始执行（从第一步开始），并重置所有步骤的内部状态 */
     public void start() {
         currentStep = 0;
+        for (AtomicAction step : steps) {
+            step.reset();
+        }
     }
 
     /** 所有步骤是否已完成 */

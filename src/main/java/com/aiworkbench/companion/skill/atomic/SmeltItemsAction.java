@@ -320,6 +320,15 @@ public class SmeltItemsAction implements AtomicAction {
     }
 
     @Override
+    public void reset() {
+        tickCounter = 0;
+        remainingCount = totalCraftCount;
+        waitTicks = 0;
+        phase = Phase.APPROACH;
+        searched = false;
+    }
+
+    @Override
     public String getDescription() {
         return "熔炉冶炼";
     }

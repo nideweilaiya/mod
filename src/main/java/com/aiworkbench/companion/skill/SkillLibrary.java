@@ -27,6 +27,9 @@ public class SkillLibrary {
     private static final String SKILLS_DIR = "skills";
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
+    /** 向量技能库 —— 语义检索 */
+    private final VectorSkillLibrary vectorLib = new VectorSkillLibrary();
+
     /** 预制技能注册表（技能名 → 技能） */
     private final Map<String, Skill> presets = new ConcurrentHashMap<>();
 
@@ -49,6 +52,8 @@ public class SkillLibrary {
             return;
         }
         presets.put(skill.getName(), skill);
+        // 同时索引到向量库，供语义搜索使用
+        vectorLib.indexSkill(skill);
         AICompanionMod.LOGGER.debug("[SkillLibrary] Registered preset skill: '{}'", skill.getName());
     }
 
@@ -170,6 +175,8 @@ public class SkillLibrary {
             this.skillsDir.mkdirs();
         }
         loadAll();
+        // 同步设置向量库目录并加载已持久化的嵌入向量
+        vectorLib.setWorldDirectory(worldDir);
     }
 
     /** 加载所有玩家技能文件 */
@@ -212,5 +219,54 @@ public class SkillLibrary {
         } catch (IOException e) {
             AICompanionMod.LOGGER.error("[SkillLibrary] Failed to save skills for {}: {}", playerUuid, e.getMessage());
         }
+    }
+
+    // ================ 语义搜索 ================
+
+    /**
+     * 根据自然语言任务描述进行语义相似度检索。
+     * 委托给 VectorSkillLibrary 的嵌入向量搜索实现。
+     *
+     * @param taskDescription 自然语言任务描述（如 "帮我挖一些铁矿石"）
+     * @param playerUuid      搜索的玩家 UUID
+     * @param topK            返回前 K 个最相似的技能
+     * @return 按相似度降序排列的技能列表
+     */
+    public List<Skill> searchSimilar(String taskDescription, UUID playerUuid, int topK) {
+        return vectorLib.searchSimilarSkills(taskDescription, playerUuid, this, topK);
+    }
+
+    /**
+     * 根据描述查找技能 —— 先精确匹配名称，失败时回退到语义搜索。
+     *
+     * @param description 技能名称或自然语言描述
+     * @param playerUuid  搜索的玩家 UUID
+     * @return 最匹配的技能，未找到返回 null
+     */
+    @Nullable
+    public Skill findSkillByDescription(String description, UUID playerUuid) {
+        // 先尝试精确名称匹配
+        Skill exact = getPreset(description);
+        if (exact != null) return exact;
+        // 再尝试玩家已学技能名称匹配
+        exact = getPlayerSkill(playerUuid, description);
+        if (exact != null) return exact;
+        // 回退到语义搜索
+        List<Skill> results = searchSimilar(description, playerUuid, 1);
+        return results.isEmpty() ? null : results.get(0);
+    }
+
+    /**
+     * 重建所有预制技能的嵌入向量索引。
+     * 清空现有向量缓存，重新为所有已注册的预制技能生成嵌入向量。
+     */
+    public void reindexAllPresets() {
+        vectorLib.reindexAll(new ArrayList<>(presets.values()));
+        AICompanionMod.LOGGER.info("[SkillLibrary] Reindexed all {} presets into vector library", presets.size());
+    }
+
+    /** 获取内部向量技能库（供命令和外部组件使用） */
+    public VectorSkillLibrary getVectorLibrary() {
+        return vectorLib;
     }
 }

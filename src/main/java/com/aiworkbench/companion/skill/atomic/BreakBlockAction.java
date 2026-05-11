@@ -22,7 +22,7 @@ public class BreakBlockAction implements AtomicAction {
 
     private static final double BREAK_DISTANCE_SQ = 3.0 * 3.0;
     private static final float BASE_BREAK_TICKS_PER_HARDNESS = 30f;
-    private static final int SEARCH_RADIUS = 6;
+    private static final int SEARCH_RADIUS = 12;
     private static final int TIMEOUT_TICKS = 400;
 
     private final BlockMatcher matcher;
@@ -57,6 +57,7 @@ public class BreakBlockAction implements AtomicAction {
         }
 
         if (target == null) {
+            AICompanionMod.LOGGER.info("[BreakBlock] No matching blocks found within radius {}", SEARCH_RADIUS);
             return true; // 没有找到方块，跳过
         }
 
@@ -79,17 +80,22 @@ public class BreakBlockAction implements AtomicAction {
             if (matcher.matches(entity.level(), target)) {
                 BlockState state = entity.level().getBlockState(target);
                 float hardness = state.getBlock().defaultDestroyTime();
-                if (hardness < 0) hardness = 50; // 基岩等
-
-                float toolSpeed = entity.getToolDigSpeed(state);
-                accumulatedProgress += toolSpeed / (hardness * BASE_BREAK_TICKS_PER_HARDNESS);
+                if (hardness < 0) hardness = 50;
+                float toolSpeed = entity.getEffectiveDigSpeed(state);
+                accumulatedProgress += toolSpeed / (hardness * 30f);
                 isBreaking = true;
 
-                if (mineTicks % 6 == 0) {
-                    entity.swing(net.minecraft.world.InteractionHand.MAIN_HAND);
+                // 挥动手臂 + 方块破裂动画
+                entity.swing(net.minecraft.world.InteractionHand.MAIN_HAND);
+                if (entity.level() instanceof net.minecraft.server.level.ServerLevel sl && mineTicks % 4 == 0) {
+                    int crackStage = (int)(accumulatedProgress * 10);
+                    if (crackStage > 9) crackStage = 9;
+                    sl.destroyBlockProgress(entity.getId(), target, crackStage);
                 }
 
                 if (accumulatedProgress >= 1.0f) {
+                    if (entity.level() instanceof net.minecraft.server.level.ServerLevel sl)
+                        sl.destroyBlockProgress(entity.getId(), target, -1);
                     breakBlock(entity, target);
                     accumulatedProgress = 0f;
                     mineTicks = 0;
@@ -120,6 +126,8 @@ public class BreakBlockAction implements AtomicAction {
     @Override
     public void stop(AutomatonEntity entity) {
         entity.getNavigation().stop();
+        if (target != null && entity.level() instanceof net.minecraft.server.level.ServerLevel sl)
+            sl.destroyBlockProgress(entity.getId(), target, -1);
         tickCounter = 0;
         accumulatedProgress = 0f;
         mineTicks = 0;
@@ -171,6 +179,16 @@ public class BreakBlockAction implements AtomicAction {
 
         AICompanionMod.LOGGER.info("[BreakBlock] Broke {} at {}",
                 state.getBlock().builtInRegistryHolder().key().location(), pos);
+    }
+
+    @Override
+    public void reset() {
+        target = null;
+        tickCounter = 0;
+        accumulatedProgress = 0f;
+        mineTicks = 0;
+        isBreaking = false;
+        searched = false;
     }
 
     @Override

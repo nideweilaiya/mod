@@ -54,8 +54,11 @@ public class AICompanionMod {
 
     public static final java.util.function.Supplier<MenuType<CompanionContainer>> COMPANION_CONTAINER =
         MENU_TYPES.register("companion_container",
-            () -> IForgeMenuType.create((containerId, inv, data) ->
-                new CompanionContainer(containerId, inv)));
+            () -> IForgeMenuType.create((containerId, inv, data) -> {
+                // data可能为null（SimpleMenuProvider不写extra data），也可能是空buffer
+                int entityId = (data != null && data.readableBytes() >= 4) ? data.readInt() : -1;
+                return new CompanionContainer(containerId, inv, entityId);
+            }));
 
     public AICompanionMod() {
         // Register entity types, items, creative tab, and menu types on the MOD bus
@@ -80,7 +83,7 @@ public class AICompanionMod {
         LOGGER.info("  Mod ID:     {}", MODID);
         LOGGER.info("  Version:    {}", VERSION);
         LOGGER.info("  MC Version: 1.20.4");
-        LOGGER.info("  Forge:      49.0.30");
+        LOGGER.info("  Forge:      49.2.7");
         LOGGER.info("  Java:       {}", System.getProperty("java.version"));
         LOGGER.info("  Platform:   {}", FMLLoader.getDist().isClient() ? "CLIENT" : "SERVER");
         LOGGER.info("============================================================");
@@ -134,6 +137,15 @@ public class AICompanionMod {
         // Load companion config
         CompanionConfig.load(server);
         LOGGER.info("[Server] Companion config loaded");
+
+        // Auto-create skin directory in world save
+        java.io.File skinDir = new java.io.File(
+            server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT).toFile(),
+            "aicompanion/skins");
+        if (!skinDir.exists()) {
+            skinDir.mkdirs();
+            LOGGER.info("[Server] Created skin directory: {}", skinDir.getAbsolutePath());
+        }
 
         // Initialize skill library with world directory for JSON persistence
         if (skillLibrary != null) {

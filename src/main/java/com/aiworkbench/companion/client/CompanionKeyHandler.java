@@ -68,10 +68,10 @@ public class CompanionKeyHandler {
         CATEGORY
     );
 
-    // ESC键 - 取消当前任务，返回跟随模式
+    // Z键 - 取消当前任务，返回跟随模式
     public static final KeyMapping FOLLOW_CANCEL_KEY = new KeyMapping(
         KEY_FOLLOW_CANCEL,
-        GLFW.GLFW_KEY_ESCAPE,
+        GLFW.GLFW_KEY_Z,
         CATEGORY
     );
 
@@ -173,7 +173,7 @@ public class CompanionKeyHandler {
             // F 键 - 切换跟随/任务模式
             if (FOLLOW_TOGGLE_KEY.consumeClick()) {
                 mc.player.connection.sendCommand("companion followtoggle");
-                AICompanionMod.LOGGER.info("[KeyHandler] F key pressed: toggling follow mode");
+                AICompanionMod.LOGGER.info("[KeyHandler] V key pressed: toggling follow mode");
             }
 
             // ESC 键 - 取消当前任务，返回跟随模式

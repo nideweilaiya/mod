@@ -136,6 +136,14 @@ public class AttackEntityAction implements AtomicAction {
     }
 
     @Override
+    public void reset() {
+        target = null;
+        tickCounter = 0;
+        retargetCooldown = 0;
+        searched = false;
+    }
+
+    @Override
     public String getDescription() {
         return "攻击目标";
     }

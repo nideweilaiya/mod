@@ -14,17 +14,29 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Manages companion skins from local files.
- * Skins are loaded from .minecraft/aicompanion/skins/ folder.
+ * Skins are loaded from {world}/aicompanion/skins/ folder (统一到世界存档目录).
  * Supported formats: PNG (64x32 or 64x64)
  */
 public class CompanionSkinManager {
     private static final Map<String, ResourceLocation> skinCache = new ConcurrentHashMap<>();
     private static final String SKINS_FOLDER = "aicompanion/skins";
 
-    /**
-     * Load a skin from local file (without extension).
-     * File should be at: .minecraft/aicompanion/skins/{skinId}.png
-     */
+    /** 获取皮肤目录：优先世界存档目录，fallback到.minecraft目录 */
+    private static Path getSkinsPath() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc == null) return Paths.get(mc.gameDirectory.getPath(), SKINS_FOLDER);
+
+        // 单人游戏：使用世界存档目录
+        if (mc.hasSingleplayerServer() && mc.getSingleplayerServer() != null) {
+            return Paths.get(mc.getSingleplayerServer()
+                .getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT)
+                .toUri()).resolve(SKINS_FOLDER);
+        }
+        // 多人游戏/fallback：使用.minecraft目录
+        return Paths.get(mc.gameDirectory.getPath(), SKINS_FOLDER);
+    }
+
+    /** 加载本地皮肤文件（不含扩展名） */
     public static ResourceLocation loadLocalSkin(String skinId) {
         if (skinCache.containsKey(skinId)) {
             return skinCache.get(skinId);
@@ -33,8 +45,7 @@ public class CompanionSkinManager {
         Minecraft mc = Minecraft.getInstance();
         if (mc == null) return getDefaultSkin();
 
-        Path skinsPath = Paths.get(mc.gameDirectory.getPath(), SKINS_FOLDER);
-        File skinFile = skinsPath.resolve(skinId + ".png").toFile();
+        File skinFile = getSkinsPath().resolve(skinId + ".png").toFile();
 
         try {
             if (skinFile.exists() && skinFile.isFile()) {
@@ -42,34 +53,23 @@ public class CompanionSkinManager {
                 DynamicTexture tex = new DynamicTexture(NativeImage.read(Files.readAllBytes(skinFile.toPath())));
                 mc.getTextureManager().register(rl, tex);
                 skinCache.put(skinId, rl);
-                // Show in-game message
-                mc.player.displayClientMessage(net.minecraft.network.chat.Component.literal("§a[OK] Skin loaded: " + skinId), false);
                 return rl;
-            } else {
-                mc.player.displayClientMessage(net.minecraft.network.chat.Component.literal("§c[FAIL] Skin not found at: " + skinFile.getAbsolutePath()), false);
             }
         } catch (Exception e) {
-            mc.player.displayClientMessage(net.minecraft.network.chat.Component.literal("§c[ERROR] " + e.getMessage()), false);
+            // 静默失败，使用默认皮肤
         }
 
         return getDefaultSkin();
     }
 
-    /**
-     * Get the default companion skin (Steve slim).
-     */
+    /** 获取默认同伴皮肤 (Steve slim) */
     public static ResourceLocation getDefaultSkin() {
         return new ResourceLocation("minecraft", "textures/entity/player/slim/steve.png");
     }
 
-    /**
-     * Get list of available local skins from the skins folder.
-     */
+    /** 列出皮肤目录下所有可用皮肤 */
     public static String[] getAvailableSkins() {
-        Minecraft mc = Minecraft.getInstance();
-        if (mc == null) return new String[0];
-
-        Path skinsPath = Paths.get(mc.gameDirectory.getPath(), SKINS_FOLDER);
+        Path skinsPath = getSkinsPath();
         if (!Files.exists(skinsPath)) return new String[0];
 
         File[] files = skinsPath.toFile().listFiles((dir, name) -> name.endsWith(".png"));

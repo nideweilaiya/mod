@@ -221,6 +221,14 @@ public class BuildStructureAction implements AtomicAction {
     }
 
     @Override
+    public void reset() {
+        origin = null;
+        currentIndex = 0;
+        timeoutCounter = 0;
+        done = false;
+    }
+
+    @Override
     public String getDescription() {
         return "建造: " + blockType + " (" + offsets.length + " 格)";
     }

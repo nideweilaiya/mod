@@ -2,6 +2,7 @@ package com.aiworkbench.companion.inventory;
 
 import com.aiworkbench.companion.AICompanionMod;
 import com.aiworkbench.companion.entity.AutomatonEntity;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.player.Inventory;
@@ -9,12 +10,16 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
-import net.minecraftforge.items.IItemHandler;
+import net.minecraft.world.level.Level;
+import net.minecraftforge.items.IItemHandlerModifiable;
 import net.minecraftforge.items.SlotItemHandler;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
- * 同伴背包 Container — 基于 AbstractContainerMenu 的标准实现。
+ * 同伴背包 Container — 基于 Forge 标准 AbstractContainerMenu + PacketBuffer 实现。
+ * <p>
+ * 通过实体 ID 在服务端和客户端之间传递同伴引用，支持单人游戏和专用服务器。
  * <p>
  * 槽位布局（共 69 格）：
  *   0-5:   装备槽（主手、副手、头、胸、腿、脚）
@@ -24,39 +29,50 @@ import org.jetbrains.annotations.NotNull;
  */
 public class CompanionContainer extends AbstractContainerMenu {
 
-    // 静态引用：在 openMenu 前设置，Container 构造时读取
-    private static final java.util.Map<java.util.UUID, com.aiworkbench.companion.entity.AutomatonEntity>
-        pendingCompanions = new java.util.concurrent.ConcurrentHashMap<>();
-
-    public static void setPendingCompanion(java.util.UUID playerId, com.aiworkbench.companion.entity.AutomatonEntity companion) {
-        pendingCompanions.put(playerId, companion);
-    }
-
+    @Nullable
     private final AutomatonEntity companion;
-    private final IItemHandler companionInvHandler;
+    private final IItemHandlerModifiable companionInvHandler;
 
-    /** MenuType 构造器（客户端和服务端通用） */
-    public CompanionContainer(int containerId, Inventory playerInv) {
-        super(null, containerId);
-        // 从静态映射中获取同伴引用
-        AutomatonEntity c = pendingCompanions.remove(playerInv.player.getUUID());
-        this.companion = c != null ? c : null;
-        this.companionInvHandler = companion != null ? new CompanionItemHandler(companion) : null;
-
-        if (companion == null) {
-            AICompanionMod.LOGGER.warn("[CompanionContainer] Companion not found for player {}", playerInv.player.getName().getString());
-            return;
-        }
-
+    /**
+     * 通过实体 ID 构造（服务端和客户端通用）。
+     * <p>
+     * 槽位数量始终固定为69格（装备6+同伴背包27+玩家背包27+快捷栏9），
+     * 无论 companion 是否找到。客户端找不到同伴时使用空Handler占位。
+     */
+    public CompanionContainer(int containerId, Inventory playerInv, int companionEntityId) {
+        super(AICompanionMod.COMPANION_CONTAINER.get(), containerId);
+        this.companion = findCompanion(playerInv.player.level(), playerInv.player, companionEntityId);
+        this.companionInvHandler = companion != null ? new CompanionItemHandler(companion) : new EmptyHandler();
         addSlots(playerInv);
+
+        // 背包打开：暂停autoEquip，防止覆盖玩家的手动装备操作
+        if (this.companion != null) {
+            this.companion.setSuppressAutoEquip(true);
+            AICompanionMod.LOGGER.debug("[CompanionContainer] Opened - autoEquip paused for companion {}",
+                this.companion.getUUID());
+        }
     }
 
-    /** 直接构造器（服务端 createMenu 使用） */
-    public CompanionContainer(int containerId, Inventory playerInv, AutomatonEntity companion) {
-        super(null, containerId);
-        this.companion = companion;
-        this.companionInvHandler = new CompanionItemHandler(companion);
-        addSlots(playerInv);
+    @Nullable
+    private static AutomatonEntity findCompanion(Level level, Player player, int entityId) {
+        // 服务端：直接通过实体ID查找
+        if (entityId > 0) {
+            Entity entity = level.getEntity(entityId);
+            if (entity instanceof AutomatonEntity ae && ae.isAlive()) {
+                return ae;
+            }
+        }
+        // 客户端或fallback：扫描玩家附近的同伴实体
+        for (AutomatonEntity ae : level.getEntitiesOfClass(AutomatonEntity.class,
+                player.getBoundingBox().inflate(32.0))) {
+            if (ae.isAlive()
+                    && ae.getOwnerUUID() != null
+                    && ae.getOwnerUUID().equals(player.getUUID())) {
+                return ae;
+            }
+        }
+        AICompanionMod.LOGGER.warn("[CompanionContainer] Companion not found for player {}", player.getName().getString());
+        return null;
     }
 
     private void addSlots(Inventory playerInv) {
@@ -71,7 +87,7 @@ public class CompanionContainer extends AbstractContainerMenu {
             EquipmentSlot.HEAD, EquipmentSlot.CHEST,
             EquipmentSlot.LEGS, EquipmentSlot.FEET
         };
-        int equipStartX = 8 + (9 * 18 - 6 * 18) / 2; // 居中 6 个装备槽
+        int equipStartX = 8 + (9 * 18 - 6 * 18) / 2;
         for (int i = 0; i < equipSlots.length; i++) {
             this.addSlot(new CompanionEquipmentSlot(companion, equipSlots[i], i,
                 equipStartX + i * 18, equipY));
@@ -107,6 +123,7 @@ public class CompanionContainer extends AbstractContainerMenu {
         if (stack.isEmpty()) return ItemStack.EMPTY;
 
         ItemStack original = stack.copy();
+        int originalCount = original.getCount();
         Slot sourceSlot = this.slots.get(index);
 
         if (index < 33) {
@@ -116,7 +133,6 @@ public class CompanionContainer extends AbstractContainerMenu {
             }
         } else {
             // 从玩家背包(33-68) → 先尝试同伴背包，再尝试装备槽
-            // 直接用 stack 操作，moveItemStackTo 会修改它
             if (this.moveItemStackTo(stack, 6, 33, false)) {
                 // 成功放入同伴背包
             } else if (this.moveItemStackTo(stack, 0, 6, false)) {
@@ -140,42 +156,65 @@ public class CompanionContainer extends AbstractContainerMenu {
             sourceSlot.setChanged();
         }
 
-        sourceSlot.onTake(player, stack);
-        return original;
+        // 计算实际取走的物品数量，传递给 onTake
+        int takenCount = originalCount - stack.getCount();
+        if (takenCount > 0) {
+            ItemStack taken = original.copy();
+            taken.setCount(takenCount);
+            sourceSlot.onTake(player, taken);
+        }
+        return stack;
     }
 
     @Override
     public boolean stillValid(@NotNull Player player) {
-        // 同维度且8格内，或不同维度不允许操作
+        if (companion == null) return false;
         return companion.isAlive()
             && companion.level().dimension().equals(player.level().dimension())
             && player.distanceToSqr(companion) <= 64.0;
+    }
+
+    @Override
+    public void removed(@NotNull Player player) {
+        super.removed(player);
+        // 背包关闭：恢复autoEquip
+        if (this.companion != null && this.companion.isAlive()) {
+            this.companion.setSuppressAutoEquip(false);
+            this.companion.notifyManualEquip(); // 同时设置冷却，防止关闭后立即被覆盖
+            AICompanionMod.LOGGER.debug("[CompanionContainer] Closed - autoEquip resumed for companion {}",
+                this.companion.getUUID());
+        }
     }
 
     // ==================== 自定义槽位 ====================
 
     /**
      * 装备槽 — 直接读写 AutomatonEntity 的装备栏。
+     * 客户端companion为null时回退到空容器。
      */
     private static class CompanionEquipmentSlot extends Slot {
+        @Nullable
         private final AutomatonEntity companion;
         private final EquipmentSlot equipSlot;
 
-        CompanionEquipmentSlot(AutomatonEntity companion, EquipmentSlot equipSlot,
+        CompanionEquipmentSlot(@Nullable AutomatonEntity companion, EquipmentSlot equipSlot,
                                int index, int x, int y) {
-            super(new DummyContainer(1), 0, x, y); // Dummy container, overridden below
+            super(new DummyContainer(1), 0, x, y);
             this.companion = companion;
             this.equipSlot = equipSlot;
         }
 
         @Override
         public @NotNull ItemStack getItem() {
-            return companion.getItemBySlot(equipSlot);
+            return companion != null ? companion.getItemBySlot(equipSlot) : ItemStack.EMPTY;
         }
 
         @Override
         public void set(@NotNull ItemStack stack) {
-            companion.setItemSlot(equipSlot, stack);
+            if (companion != null) {
+                companion.setItemSlot(equipSlot, stack);
+                companion.notifyManualEquip(); // 通知：玩家手动操作了装备
+            }
             setChanged();
         }
 
@@ -193,17 +232,34 @@ public class CompanionContainer extends AbstractContainerMenu {
         public @NotNull ItemStack remove(int amount) {
             ItemStack current = getItem();
             if (!current.isEmpty() && amount > 0) {
-                set(ItemStack.EMPTY);
-                return current;
+                int toRemove = Math.min(amount, current.getCount());
+                ItemStack removed = current.copy();
+                removed.setCount(toRemove);
+                current.shrink(toRemove);
+                set(current.isEmpty() ? ItemStack.EMPTY : current);
+                return removed;
             }
             return ItemStack.EMPTY;
         }
     }
 
     /**
+     * 空Handler — 客户端找不到同伴时占位，确保槽位数量与服务端一致。
+     */
+    private static class EmptyHandler implements IItemHandlerModifiable {
+        @Override public int getSlots() { return 27; }
+        @Override public void setStackInSlot(int slot, @NotNull ItemStack stack) {}
+        @Override public @NotNull ItemStack getStackInSlot(int slot) { return ItemStack.EMPTY; }
+        @Override public @NotNull ItemStack insertItem(int slot, @NotNull ItemStack stack, boolean sim) { return stack; }
+        @Override public @NotNull ItemStack extractItem(int slot, int amount, boolean sim) { return ItemStack.EMPTY; }
+        @Override public int getSlotLimit(int slot) { return 64; }
+        @Override public boolean isItemValid(int slot, @NotNull ItemStack stack) { return false; }
+    }
+
+    /**
      * IItemHandler 适配器 — 将 AutomatonEntity 的内部 NonNullList 包装为标准接口。
      */
-    private static class CompanionItemHandler implements IItemHandler {
+    private static class CompanionItemHandler implements IItemHandlerModifiable {
         private final AutomatonEntity companion;
 
         CompanionItemHandler(AutomatonEntity companion) {
@@ -211,8 +267,11 @@ public class CompanionContainer extends AbstractContainerMenu {
         }
 
         @Override
-        public int getSlots() {
-            return 27;
+        public int getSlots() { return 27; }
+
+        @Override
+        public void setStackInSlot(int slot, @NotNull ItemStack stack) {
+            companion.setItem(slot, stack);
         }
 
         @Override
@@ -223,10 +282,8 @@ public class CompanionContainer extends AbstractContainerMenu {
         @Override
         public @NotNull ItemStack insertItem(int slot, @NotNull ItemStack stack, boolean simulate) {
             if (stack.isEmpty()) return ItemStack.EMPTY;
-
             ItemStack existing = companion.getItem(slot);
             int limit = Math.min(stack.getMaxStackSize(), getSlotLimit(slot));
-
             if (!existing.isEmpty()) {
                 if (!ItemStack.isSameItemSameTags(stack, existing)) return stack;
                 int space = limit - existing.getCount();
@@ -256,34 +313,25 @@ public class CompanionContainer extends AbstractContainerMenu {
         public @NotNull ItemStack extractItem(int slot, int amount, boolean simulate) {
             ItemStack existing = companion.getItem(slot);
             if (existing.isEmpty()) return ItemStack.EMPTY;
-
             int toRemove = Math.min(amount, existing.getCount());
             ItemStack result = existing.copy();
             result.setCount(toRemove);
-
             if (!simulate) {
                 existing.shrink(toRemove);
-                if (existing.isEmpty()) {
-                    companion.setItem(slot, ItemStack.EMPTY);
-                }
+                if (existing.isEmpty()) companion.setItem(slot, ItemStack.EMPTY);
             }
             return result;
         }
 
         @Override
-        public int getSlotLimit(int slot) {
-            return 64;
-        }
+        public int getSlotLimit(int slot) { return 64; }
 
         @Override
-        public boolean isItemValid(int slot, @NotNull ItemStack stack) {
-            return true;
-        }
+        public boolean isItemValid(int slot, @NotNull ItemStack stack) { return true; }
     }
 
     /**
      * 空容器实现 — 用于装备槽的 Slot 构造参数占位。
-     * 所有方法都通过 CompanionEquipmentSlot 被覆盖，实际数据不会被访问。
      */
     private static class DummyContainer implements net.minecraft.world.Container {
         private final ItemStack[] items;

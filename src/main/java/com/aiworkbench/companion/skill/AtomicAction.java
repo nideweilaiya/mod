@@ -36,6 +36,12 @@ public interface AtomicAction {
     void stop(AutomatonEntity entity);
 
     /**
+     * 重置内部状态，使此操作可以重新执行。
+     * 在技能每次启动时由 {@link SkillAction#start()} 调用。
+     */
+    default void reset() {}
+
+    /**
      * 当前操作的描述文本（显示在同伴头顶）。
      */
     default String getDescription() {

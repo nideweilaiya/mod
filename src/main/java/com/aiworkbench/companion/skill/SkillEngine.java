@@ -33,6 +33,17 @@ public class SkillEngine {
     /** 是否已完成原子操作 tick（防止重复推进） */
     private boolean stepCompleted;
 
+    /** 技能开始执行的 tick 计数 */
+    private int skillStartTick;
+
+    /** 最近一次技能执行的反馈 */
+    @Nullable
+    private FeedbackCollector.SkillFeedback lastFeedback;
+
+    /** 最近一次技能执行的 LLM 验证结果（异步写入，volatile 保证可见性） */
+    @Nullable
+    private volatile SkillVerifier.VerificationResult lastVerification;
+
     // ================ 公开方法 ================
 
     /**
@@ -56,6 +67,7 @@ public class SkillEngine {
         this.active = true;
         this.currentSkillName = skill.getName();
         this.stepCompleted = false;
+        this.skillStartTick = entity.getTickCounter();
         updateStepDescription();
 
         // 标记实体，暂停 Goal 系统
@@ -127,6 +139,16 @@ public class SkillEngine {
             }
         }
 
+        // 收集反馈（在 cleanup 前，需要 currentSkill 仍可用）
+        Skill skill = currentSkill;
+        if (skill != null) {
+            FeedbackCollector.SkillFeedback feedback = FeedbackCollector.collect(skill, entity, FeedbackCollector.FailureReason.INTERRUPTED);
+            feedback.executionTicks = entity.getTickCounter() - skillStartTick;
+            this.lastFeedback = feedback;
+            AICompanionMod.LOGGER.info("[SkillEngine] Feedback for '{}' (cancelled): ticks={}",
+                    currentSkillName, feedback.executionTicks);
+        }
+
         cleanup(entity);
         entity.showDialogue("§7技能已取消", 40);
         AICompanionMod.LOGGER.info("[SkillEngine] Cancelled skill '{}'", currentSkillName);
@@ -153,10 +175,34 @@ public class SkillEngine {
         return currentSkill;
     }
 
+    /** 获取最近一次技能执行的反馈 */
+    @Nullable
+    public FeedbackCollector.SkillFeedback getLastFeedback() {
+        return lastFeedback;
+    }
+
+    /** 获取最近一次技能执行的 LLM 验证结果 */
+    @Nullable
+    public SkillVerifier.VerificationResult getLastVerification() {
+        return lastVerification;
+    }
+
     // ================ 内部方法 ================
 
     private void completeSkill(AutomatonEntity entity) {
         String skillName = currentSkillName;
+
+        // 收集环境反馈（在 cleanup 前，需要 currentSkill 仍可用）
+        Skill skill = currentSkill;
+        if (skill != null) {
+            FeedbackCollector.SkillFeedback feedback = FeedbackCollector.collect(skill, entity);
+            feedback.executionTicks = entity.getTickCounter() - skillStartTick;
+            this.lastFeedback = feedback;
+            AICompanionMod.LOGGER.info("[SkillEngine] Feedback for '{}': success={}, ticks={}, blocksBroken={}, itemsCollected={}",
+                    skillName, feedback.isSuccess(), feedback.executionTicks,
+                    feedback.brokenBlocks.size(), feedback.collectedItems.size());
+        }
+
         entity.showDialogue("§a技能完成: " + skillName, 60);
         AICompanionMod.LOGGER.info("[SkillEngine] Completed skill '{}'", skillName);
 
@@ -167,6 +213,29 @@ public class SkillEngine {
         }
 
         cleanup(entity);
+
+        // 异步自我验证（不阻塞游戏主线程）
+        if (lastFeedback != null && skill != null) {
+            final String skillDesc = skill.getDescription();
+            // 从玩家配置读取模型名（不再硬编码）
+            String model = "llama3.2:latest";
+            if (owner != null) {
+                model = com.aiworkbench.companion.CompanionConfig.getModel(owner.getUUID());
+            }
+            SkillVerifier.verifyAsync(skillDesc, lastFeedback, model)
+                .thenAccept(result -> {
+                    lastVerification = result;
+                    if (!result.success) {
+                        AICompanionMod.LOGGER.info("[SkillEngine] Verification failed for '{}': {}",
+                            skillName, result.critique);
+                        if (result.suggestion != null && !result.suggestion.isEmpty()) {
+                            AICompanionMod.LOGGER.info("[SkillEngine] Suggestion: {}", result.suggestion);
+                        }
+                    } else {
+                        AICompanionMod.LOGGER.info("[SkillEngine] Verification passed for '{}'", skillName);
+                    }
+                });
+        }
     }
 
     private void cleanup(AutomatonEntity entity) {

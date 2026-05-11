@@ -61,6 +61,7 @@ public class CompanionAI {
         + "- smeltIronIngot: 冶炼铁锭\n"
         + "- lookAtOwner: 看向主人\n"
         + "- moveForward: 向前移动\n"
+        + "- gather: 开启资源采集模式（自动挖矿+砍树）\n"
         + "\n重要规则：\n"
         + "1. 任何任务/行动请求 → 必须输出 [SKILL:技能名]\n"
         + "2. 纯聊天/问问题 → 正常中文回复，不要加 [SKILL:]\n"
@@ -68,8 +69,11 @@ public class CompanionAI {
         + "4. 技能名区分大小写：是 mineIronOre 不是 MineIronOre\n"
         + "5. 如果没有匹配的技能，回复\"我还不会做这个呢\"\n"
         + "6. 如需创建新技能，用 [GENERATE:简短描述]\n"
+        + "7. 采集/挖矿/砍树/收集资源 → 都用 [SKILL:gather]\n"
+        + "8. 需要优先采集特定资源时：用 [GATHER:铁,钻石] 格式\n"
         + "\n示例：\n"
-        + "主人：挖点铁矿 → 好的！[SKILL:mineIronOre]\n"
+        + "主人：挖点铁矿 → 好的！[SKILL:gather]\n"
+        + "主人：帮我找钻石 → 马上去找钻石！[GATHER:钻石] [SKILL:gather]\n"
         + "主人：你好 → 主人好呀！今天天气不错~";
 
     public CompanionAI(String companionId, String ownerName) {
@@ -234,46 +238,13 @@ public class CompanionAI {
         // Add current message
         messages.add(Map.of("role", "user", "content", prompt));
 
-        request.put("messages", messages);
+        java.util.LinkedHashMap<String, Object> opts = new java.util.LinkedHashMap<>();
+        opts.put("temperature", 0.3);
+        opts.put("num_predict", 150);
 
-        String json = gson.toJson(request);
-
-        for (int i = 0; i < MAX_RETRIES; i++) {
-            try {
-                URL url = new URL(OLLAMA_BASE + "/api/chat");
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setRequestMethod("POST");
-                conn.setRequestProperty("Content-Type", "application/json");
-                conn.setRequestProperty("Accept", "application/json");
-                conn.setDoOutput(true);
-                conn.setConnectTimeout(TIMEOUT_MS);
-                conn.setReadTimeout(TIMEOUT_MS);
-
-                try (OutputStream os = conn.getOutputStream()) {
-                    os.write(json.getBytes(StandardCharsets.UTF_8));
-                }
-
-                int code = conn.getResponseCode();
-                if (code == 200) {
-                    try (BufferedReader reader = new BufferedReader(
-                            new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
-                        StringBuilder response = new StringBuilder();
-                        String line;
-                        while ((line = reader.readLine()) != null) {
-                            response.append(line);
-                        }
-                        Map<String, Object> resp = gson.fromJson(response.toString(), Map.class);
-                        return extractChatResponse(resp);
-                    }
-                } else {
-                    AICompanionMod.LOGGER.warn("LLM returned code: " + code);
-                }
-            } catch (Exception e) {
-                AICompanionMod.LOGGER.warn("LLM attempt " + (i+1) + " failed: " + e.getClass().getName() + ": " + e.getMessage());
-            }
-        }
-
-        return "...";
+        String result = com.aiworkbench.companion.ai.OllamaClient.chat(
+            model, messages, opts, TIMEOUT_MS, MAX_RETRIES);
+        return result != null ? result : "...";
     }
 
     private String extractChatResponse(Map<String, Object> resp) {

@@ -26,7 +26,7 @@ public class CompanionSettingsScreen extends Screen {
 
     // Scroll
     private double scrollOffset = 0;
-    private static final int CONTENT_HEIGHT = 440;
+    private static final int CONTENT_HEIGHT = 600;
     private int viewHeight;
 
     private static final String[] AI_MODELS = {
@@ -88,16 +88,27 @@ public class CompanionSettingsScreen extends Screen {
         int my = sy + 24;
 
         addRenderableWidget(Button.builder(Component.literal("§a跟随"), btn -> sendCmd("companion follow"))
-            .bounds(cx - 120, my, 55, 20).build());
+            .bounds(cx - 100, my, 60, 20).build());
         addRenderableWidget(Button.builder(Component.literal("§c守护"), btn -> sendCmd("companion guard"))
-            .bounds(cx - 60, my, 55, 20).build());
-        addRenderableWidget(Button.builder(Component.literal("§b挖掘"), btn -> sendCmd("companion mine"))
-            .bounds(cx, my, 55, 20).build());
-        addRenderableWidget(Button.builder(Component.literal("§6砍伐"), btn -> sendCmd("companion chop"))
-            .bounds(cx + 60, my, 55, 20).build());
+            .bounds(cx - 35, my, 60, 20).build());
+        addRenderableWidget(Button.builder(Component.literal("§6采集"), btn -> sendCmd("companion gather"))
+            .bounds(cx + 30, my, 60, 20).build());
+
+        // ===== 自主模式小指示器（顶部快捷入口）=====
+        boolean autoMode = companion != null && companion.isAutonomousMode();
+        addRenderableWidget(Button.builder(
+            Component.literal(autoMode ? "§a🤖" : "§7🤖"),
+            btn -> {
+                sendCmd(companion != null && companion.isAutonomousMode() ?
+                    "companion autonomous off" : "companion autonomous on");
+                statusMessage = companion != null && companion.isAutonomousMode() ?
+                    "§7自主模式已关闭" : "§a自主模式已开启";
+                init();
+            }
+        ).bounds(cx + 120, my, 22, 20).build());
 
         // ===== Action Row =====
-        int ay = my + 28;
+        int ay = my + 26;
 
         addRenderableWidget(Button.builder(Component.literal("§3传送"), btn -> sendCmd("companion teleport"))
             .bounds(cx - 120, ay, 55, 20).build());
@@ -121,8 +132,22 @@ public class CompanionSettingsScreen extends Screen {
         addRenderableWidget(Button.builder(Component.literal("§e📊 查看等级"), btn -> sendCmd("companion level"))
             .bounds(cx - 100, cy + 22, 200, 18).build());
 
+        // ===== 待确认提议 =====
+        int propY = cy + 48;
+        String pendingProposal = companion != null ? companion.getPendingProposalText() : null;
+        boolean hasProposal = pendingProposal != null && !pendingProposal.isEmpty();
+        if (hasProposal) {
+            addRenderableWidget(Button.builder(
+                Component.literal("§e💡 " + pendingProposal), btn -> {}
+            ).bounds(cx - 125, propY, 250, 16).build());
+            addRenderableWidget(Button.builder(
+                Component.literal("§a✅ 确认执行"),
+                btn -> { sendCmd("companion confirm"); statusMessage = "§a已确认执行"; init(); }
+            ).bounds(cx - 50, propY + 20, 100, 18).build());
+        }
+
         // ===== Skin Section =====
-        int sky = cy + 52;
+        int sky = hasProposal ? propY + 44 : propY;
         loadAvailableSkins();
 
         addRenderableWidget(Button.builder(Component.literal("§e皮肤: "), btn -> {})
@@ -234,24 +259,40 @@ public class CompanionSettingsScreen extends Screen {
         addRenderableWidget(Button.builder(Component.literal("§7范围-"), btn -> sendCmd("companion pickup range 3"))
             .bounds(cx + 88, pkY + 18, 35, 18).build());
 
-        // ===== 技能快捷操作 =====
-        int skY = pkY + 48;
-        addRenderableWidget(Button.builder(Component.literal("§6§l技能学习"), btn -> {}).bounds(cx - 60, skY, 120, 14).build());
+        // ===== 自主模式开关（放在拾取和技能之间，显眼位置）=====
+        int autoY2 = pkY + 38;
+        addRenderableWidget(Button.builder(
+            Component.literal(autoMode ? "§a🤖 自主模式: 开启中" : "§7🤖 自主模式: 关闭"),
+            btn -> {
+                sendCmd(companion != null && companion.isAutonomousMode() ?
+                    "companion autonomous off" : "companion autonomous on");
+                statusMessage = companion != null && companion.isAutonomousMode() ?
+                    "§7自主模式已关闭 - 同伴等待你的指令" : "§a自主模式已开启 - 同伴会自行决策";
+                init();
+            }
+        ).bounds(cx - 120, autoY2, 240, 20).build());
 
-        addRenderableWidget(Button.builder(Component.literal("§7挖矿"), btn -> sendCmd("companion chat 挖点铁矿"))
-            .bounds(cx - 120, skY + 18, 55, 18).build());
-        addRenderableWidget(Button.builder(Component.literal("§6砍树"), btn -> sendCmd("companion chat 砍树"))
-            .bounds(cx - 60, skY + 18, 55, 18).build());
-        addRenderableWidget(Button.builder(Component.literal("§e合成"), btn -> sendCmd("companion chat 合成木棍"))
-            .bounds(cx, skY + 18, 55, 18).build());
-        addRenderableWidget(Button.builder(Component.literal("§a收集"), btn -> sendCmd("companion chat 收集掉落"))
-            .bounds(cx + 60, skY + 18, 55, 18).build());
-        addRenderableWidget(Button.builder(Component.literal("§d技能库"), btn -> sendCmd("companion skill list"))
-            .bounds(cx - 40, skY + 40, 80, 18).build());
+        // ===== 采集详情入口 =====
+        int gdY = autoY2 + 26;
+        addRenderableWidget(Button.builder(Component.literal("§6⛏ 资源采集详情"), btn -> {
+            this.minecraft.setScreen(new GatheringDetailScreen(this));
+        }).bounds(cx - 70, gdY, 140, 22).build());
+
+        // 快捷操作（精简为4个实用按钮）
+        addRenderableWidget(Button.builder(Component.literal("§d⚔ 战斗"), btn -> sendCmd("companion skill learn fightZombie"))
+            .bounds(cx - 120, gdY + 28, 55, 18).build());
+        addRenderableWidget(Button.builder(Component.literal("§a⛏ 采集"), btn -> sendCmd("companion gather"))
+            .bounds(cx - 60, gdY + 28, 55, 18).build());
+        addRenderableWidget(Button.builder(Component.literal("§3💬 对话"), btn -> {
+            this.minecraft.setScreen(new ChatScreen("/companion chat "));
+        }).bounds(cx, gdY + 28, 55, 18).build());
+        boolean chatOn = com.aiworkbench.companion.client.CompanionClientState.isChatMode();
+        addRenderableWidget(Button.builder(Component.literal(chatOn ? "§bJ=聊天ON" : "§7J=聊天OFF"),
+            btn -> { /* 仅指示，J键切换 */ }).bounds(cx + 60, gdY + 28, 55, 18).build());
 
         // ===== Close =====
         addRenderableWidget(Button.builder(Component.literal("§c关闭"), btn -> onClose())
-            .bounds(cx - 30, skY + 70, 60, 18).build());
+            .bounds(cx - 30, gdY + 70, 60, 18).build());
     }
 
     private void addStatRow(String label, String stat, int currentPoints, int y, int cx) {
@@ -332,7 +373,13 @@ public class CompanionSettingsScreen extends Screen {
     }
 
     private String getSkinsPath() {
-        return Minecraft.getInstance().gameDirectory.getPath() + "/aicompanion/skins";
+        var mc = Minecraft.getInstance();
+        if (mc.hasSingleplayerServer() && mc.getSingleplayerServer() != null) {
+            return mc.getSingleplayerServer()
+                .getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT)
+                .toUri().resolve("aicompanion/skins").getPath();
+        }
+        return mc.gameDirectory.getPath() + "/aicompanion/skins";
     }
 
     private int getCurrentModelIndex() {

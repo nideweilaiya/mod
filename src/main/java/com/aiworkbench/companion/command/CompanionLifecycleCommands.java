@@ -94,8 +94,7 @@ public class CompanionLifecycleCommands {
         source.sendSuccess(() -> Component.literal("=== Companion Status ==="), false);
         source.sendSuccess(() -> Component.literal("模式: " + companion.getCurrentModeString()), false);
         source.sendSuccess(() -> Component.literal("Guard: " + (companion.isGuardModeEnabled() ? "ON" : "OFF")), false);
-        source.sendSuccess(() -> Component.literal("Mine: " + (companion.isMineModeEnabled() ? "ON" : "OFF")), false);
-        source.sendSuccess(() -> Component.literal("Chop: " + (companion.isChopModeEnabled() ? "ON" : "OFF")), false);
+        source.sendSuccess(() -> Component.literal("Gather: " + (companion.isGatherModeEnabled() ? "ON" : "OFF")), false);
         source.sendSuccess(() -> Component.literal("HP: " + (int)companion.getHealth() + "/" + (int)companion.getMaxHealth()), false);
         // 技能状态
         if (companion.isSkillActive()) {

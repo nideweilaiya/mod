@@ -34,31 +34,32 @@ public class CompanionAICommands {
     // ==================== 关键词 → 技能映射 ====================
 
     private static final List<Map.Entry<String, String>> SKILL_KEYWORDS = List.of(
-        // 挖掘类
-        Map.entry("挖铁矿",   "mineIronOre"),
-        Map.entry("挖铁",     "mineIronOre"),
-        Map.entry("铁矿",     "mineIronOre"),
-        Map.entry("铁矿石",   "mineIronOre"),
-        Map.entry("挖煤矿",   "mineCoalOre"),
-        Map.entry("挖煤",     "mineCoalOre"),
-        Map.entry("煤矿",     "mineCoalOre"),
-        Map.entry("挖石头",   "mineStone"),
-        Map.entry("挖矿",     "mineStone"),
-        Map.entry("采矿",     "mineStone"),
-        Map.entry("挖钻石",   "mineStone"),
-        Map.entry("钻石",     "mineStone"),
-        Map.entry("挖金子",   "mineStone"),
-        Map.entry("金子",     "mineStone"),
-        Map.entry("挖矿道",   "mineStone"),
-        // 砍伐类
-        Map.entry("砍树",     "collectWood"),
-        Map.entry("收集木头", "collectWood"),
-        Map.entry("木头",     "collectWood"),
-        Map.entry("木材",     "collectWood"),
-        Map.entry("原木",     "collectWood"),
-        Map.entry("砍木头",   "collectWood"),
-        Map.entry("伐木",     "collectWood"),
-        Map.entry("砍柴",     "collectWood"),
+        // 资源采集类 → 统一触发智能采集模式 (gather)
+        Map.entry("挖铁矿",   "gather"),
+        Map.entry("挖铁",     "gather"),
+        Map.entry("铁矿",     "gather"),
+        Map.entry("铁矿石",   "gather"),
+        Map.entry("挖煤矿",   "gather"),
+        Map.entry("挖煤",     "gather"),
+        Map.entry("煤矿",     "gather"),
+        Map.entry("挖石头",   "gather"),
+        Map.entry("挖矿",     "gather"),
+        Map.entry("采矿",     "gather"),
+        Map.entry("采集",     "gather"),
+        Map.entry("挖钻石",   "gather"),
+        Map.entry("钻石",     "gather"),
+        Map.entry("挖金子",   "gather"),
+        Map.entry("金子",     "gather"),
+        Map.entry("挖矿道",   "gather"),
+        // 砍伐类 → 统一触发智能采集模式 (gather)
+        Map.entry("砍树",     "gather"),
+        Map.entry("收集木头", "gather"),
+        Map.entry("木头",     "gather"),
+        Map.entry("木材",     "gather"),
+        Map.entry("原木",     "gather"),
+        Map.entry("砍木头",   "gather"),
+        Map.entry("伐木",     "gather"),
+        Map.entry("砍柴",     "gather"),
         // 战斗类
         Map.entry("打僵尸",   "fightZombie"),
         Map.entry("战斗",     "fightZombie"),
@@ -353,12 +354,19 @@ public class CompanionAICommands {
      */
     private static boolean executePresetSkill(ServerPlayer player, AutomatonEntity companion,
                                               UUID playerUUID, String skillName) {
+        // "gather" 是特殊动作：开启智能采集模式而非技能
+        if ("gather".equals(skillName)) {
+            companion.setGatherModeEnabled(true);
+            player.sendSystemMessage(Component.literal("§6⛏ 已开启智能采集模式"));
+            companion.showDialogue("§6开始采集资源！", 60);
+            return true;
+        }
+
         SkillLibrary lib = getLibrary();
         if (lib == null) return false;
 
         // 如果未学习，先学习
         if (!lib.hasSkill(playerUUID, skillName)) {
-            // 检查是否是预制技能
             Skill preset = lib.getPreset(skillName);
             if (preset == null) {
                 player.sendSystemMessage(Component.literal("§c未知技能: " + skillName));
@@ -366,7 +374,6 @@ public class CompanionAICommands {
             }
             boolean learned = lib.learnSkill(playerUUID, skillName);
             if (!learned) {
-                // 可能已经学过了（hasSkill 返回 false 但 learnSkill 返回 false）
                 // 尝试直接执行
             }
         }
@@ -374,7 +381,6 @@ public class CompanionAICommands {
         // 获取技能并执行
         Skill skill = lib.getPlayerSkill(playerUUID, skillName);
         if (skill == null) {
-            // 尝试直接拿预制技能
             skill = lib.getPreset(skillName);
             if (skill == null) {
                 player.sendSystemMessage(Component.literal("§c技能数据错误: " + skillName));

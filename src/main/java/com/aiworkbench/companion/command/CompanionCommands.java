@@ -19,7 +19,6 @@ import net.minecraft.server.level.ServerPlayer;
  * 拆分后各模块：
  * - CompanionSkinCommands: skin, list, default
  * - CompanionAICommands: chat, model, gui
- * - CompanionInventoryCommands: inventory, openinv, syncinventory, put, take, takeone, putplayer, takeoneplayer, giveall, givehalf
  * - CompanionBehaviorCommands: guard, mine, chop, follow, followtoggle, patrol, stop
  * - CompanionLifecycleCommands: status, revive, teleport, hide, come, down
  */
@@ -114,8 +113,10 @@ public class CompanionCommands {
             return 0;
         }
 
-        CompanionContainer.setPendingCompanion(player.getUUID(), companion);
-        player.openMenu(companion);
+        player.openMenu(new net.minecraft.world.SimpleMenuProvider(
+            (containerId, inv, p) ->
+                new CompanionContainer(containerId, inv, companion.getId()),
+            companion.getDisplayName()));
         return 1;
     }
 

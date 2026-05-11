@@ -128,6 +128,13 @@ public class CollectItemsAction implements AtomicAction {
     }
 
     @Override
+    public void reset() {
+        target = null;
+        tickCounter = 0;
+        emptySearchTicks = 0;
+    }
+
+    @Override
     public String getDescription() {
         return "收集物品";
     }

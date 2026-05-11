@@ -147,51 +147,11 @@ public class SkillGenerator {
      * 调用 Ollama LLM。
      */
     private static String callLLM(String prompt) {
-        Map<String, Object> request = new HashMap<>();
-        request.put("model", MODEL);
-        request.put("stream", false);
-        request.put("options", Map.of("temperature", 0.1, "num_predict", 500));
-
-        List<Map<String, String>> messages = new ArrayList<>();
-        messages.add(Map.of("role", "system", "content", SYSTEM_PROMPT));
-        messages.add(Map.of("role", "user", "content", prompt));
-        request.put("messages", messages);
-
-        String json = gson.toJson(request);
-
-        for (int i = 0; i < MAX_RETRIES; i++) {
-            try {
-                URL url = new URL(OLLAMA_BASE + "/api/chat");
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setRequestMethod("POST");
-                conn.setRequestProperty("Content-Type", "application/json");
-                conn.setRequestProperty("Accept", "application/json");
-                conn.setDoOutput(true);
-                conn.setConnectTimeout(TIMEOUT_MS);
-                conn.setReadTimeout(TIMEOUT_MS);
-
-                try (OutputStream os = conn.getOutputStream()) {
-                    os.write(json.getBytes(StandardCharsets.UTF_8));
-                }
-
-                int code = conn.getResponseCode();
-                if (code == 200) {
-                    try (BufferedReader reader = new BufferedReader(
-                            new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
-                        StringBuilder sb = new StringBuilder();
-                        String line;
-                        while ((line = reader.readLine()) != null) {
-                            sb.append(line);
-                        }
-                        Map<String, Object> resp = gson.fromJson(sb.toString(), Map.class);
-                        return extractContent(resp);
-                    }
-                }
-            } catch (Exception e) {
-                AICompanionMod.LOGGER.warn("[SkillGen] LLM attempt {} failed: {}", i + 1, e.getMessage());
-            }
-        }
-        return null;
+        java.util.LinkedHashMap<String, Object> opts = new java.util.LinkedHashMap<>();
+        opts.put("temperature", 0.1);
+        opts.put("num_predict", 500);
+        return com.aiworkbench.companion.ai.OllamaClient.chat(
+            MODEL, SYSTEM_PROMPT, prompt, opts, TIMEOUT_MS, MAX_RETRIES);
     }
 
     /**

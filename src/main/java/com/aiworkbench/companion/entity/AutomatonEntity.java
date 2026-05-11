@@ -3,6 +3,9 @@ package com.aiworkbench.companion.entity;
 import com.aiworkbench.companion.AICompanionMod;
 import com.aiworkbench.companion.ai.PerceptionEngine;
 import com.aiworkbench.companion.entity.goal.CompanionFollowGoal;
+import com.aiworkbench.companion.skill.AutoCurriculum;
+import com.aiworkbench.companion.skill.AutoCurriculum.CurriculumProposal;
+import com.aiworkbench.companion.skill.Skill;
 import com.aiworkbench.companion.skill.SkillEngine;
 import com.aiworkbench.companion.entity.goal.CompanionWanderGoal;
 import com.aiworkbench.companion.entity.goal.JumpGoal;
@@ -114,17 +117,31 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     private net.minecraft.world.entity.LivingEntity autoDefendTarget = null;
     private int autoDefendTicks = 0;
 
-    // ==================== Mine Mode (Task System) ====================
-    private boolean mineModeEnabled = false;
+    // ==================== Gather Mode (智能统一采集) ====================
+    private boolean gatherModeEnabled = false;
+    private String gatherFilter = "all"; // "all", "ores", "wood"
+    private final java.util.Set<String> gatherPriorityResources = new java.util.HashSet<>();
 
-    // ==================== Chop Mode (Task System) ====================
-    private boolean chopModeEnabled = false;
+    // ==================== 感知缓存（避免重复O(n³)扫描） ====================
+    private PerceptionEngine.PerceptionData cachedPerception;
+    private long lastPerceptionTick;
+
+    private PerceptionEngine.PerceptionData getOrGatherPerception() {
+        long now = level().getGameTime();
+        if (cachedPerception != null && now - lastPerceptionTick < 30) { // 1.5秒缓存
+            return cachedPerception;
+        }
+        cachedPerception = PerceptionEngine.gatherPerception(this);
+        lastPerceptionTick = now;
+        return cachedPerception;
+    }
 
     // ==================== Dialogue Display ====================
     private String dialogueText = "";
     private int dialogueEndTick = 0;
     private static final int DEFAULT_DIALOGUE_DURATION_TICKS = 100; // ~5 seconds
-    private long lastSituationWarningTick = 0;  // Prevent spam: only warn every ~30 seconds
+    private long lastSituationWarningTick = 0;
+    private String lastDangerType = null; // 同类型危险10秒内不重复提醒
 
     // ==================== Active Decision State Machine ====================
     private String currentQuestion = null;      // Current active question (null = no question)
@@ -132,7 +149,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     private int questionCooldown = 0;           // Cooldown ticks before next question (prevents spam)
     private static final int QUESTION_DURATION_TICKS = 60;    // 3 seconds for questions
     private static final int QUESTION_COOLDOWN_TICKS = 200;   // 10 seconds cooldown between questions
-    private static final int MIN_TICKS_BETWEEN_QUESTIONS = 600; // 30 seconds global cooldown
+    private static final int MIN_TICKS_BETWEEN_QUESTIONS = 200; // 10 seconds global cooldown
 
     // Last question type shown (to avoid repeating same question)
     private String lastQuestionType = null;
@@ -148,10 +165,14 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     // ==================== Visibility (Hide Command) ====================
     private boolean hidden = false;
 
+    // ==================== Mode Toggle Cooldown (F Key) ====================
+    private int modeToggleCooldown = 0;
+    private static final int MODE_TOGGLE_COOLDOWN_TICKS = 20; // 1 second debounce
+
     // ==================== Stop Command ====================
     private boolean movementStopped = false;
-    private int stopToggleCooldown = 0;  // Prevents accidental double-toggle
-    private static final int STOP_COOLDOWN_TICKS = 40;  // ~2 seconds
+    private int stopToggleCooldown = 0;
+    private static final int STOP_COOLDOWN_TICKS = 40;
 
     // ==================== Patrol Mode ====================
     private boolean patrolModeEnabled = false;
@@ -162,6 +183,10 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     private boolean autoPickupEnabled = true;
     private double pickupRadius = 5.0;
     private boolean pickupOnlyValuable = false;
+
+    // ==================== Manual Equip Cooldown ====================
+    private long lastManualEquipTick = 0; // 玩家手动装备的时间戳，防止autoEquip立即覆盖
+    private boolean suppressAutoEquip = false; // 背包打开期间暂停自动装备
 
     // ==================== Inventory ====================
     private static final int INVENTORY_SIZE = 27;  // 3 rows x 9 columns
@@ -179,6 +204,12 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     // ==================== Skill Engine ====================
     private final SkillEngine skillEngine = new SkillEngine();
     private volatile boolean skillActive = false;
+
+    // ==================== AutoCurriculum / Autonomous Mode ====================
+    private boolean autonomousMode = false;          // 自主模式：true=同伴自己决定做什么
+    private int curriculumTickCounter = 0;            // 课程评估计数器
+    private static final int CURRICULUM_EVAL_INTERVAL = 600; // 每30秒评估一次（600 ticks）
+    private CurriculumProposal pendingProposal = null; // 待确认的课程提议
 
     // ==================== Valuable Items (Pickup Filter) ====================
 
@@ -217,6 +248,27 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
 
     private static boolean isValuableItem(net.minecraft.world.item.Item item) {
         return VALUABLE_ITEMS.contains(item);
+    }
+
+    /**
+     * 拾取优先级：5=贵重, 4=工具武器, 3=食物, 2=建材, 1=其他, 0=垃圾
+     */
+    private static int pickupPriority(net.minecraft.world.entity.item.ItemEntity item) {
+        net.minecraft.world.item.Item i = item.getItem().getItem();
+        if (VALUABLE_ITEMS.contains(i)) return 5;
+        if (i instanceof net.minecraft.world.item.SwordItem
+            || i instanceof net.minecraft.world.item.PickaxeItem
+            || i instanceof net.minecraft.world.item.AxeItem
+            || i instanceof net.minecraft.world.item.ShovelItem
+            || i instanceof net.minecraft.world.item.HoeItem
+            || i instanceof net.minecraft.world.item.ArmorItem
+            || i instanceof net.minecraft.world.item.BowItem
+            || i instanceof net.minecraft.world.item.CrossbowItem
+            || i instanceof net.minecraft.world.item.TridentItem
+            || i instanceof net.minecraft.world.item.ShieldItem) return 4;
+        if (i.getFoodProperties(item.getItem(), null) != null) return 3;
+        if (i instanceof net.minecraft.world.item.BlockItem) return 2;
+        return 1;
     }
 
     // ==================== Auto-Recall Fields ====================
@@ -373,11 +425,8 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         // 2: Guard goal - attack hostile mobs threatening owner (only when guardModeEnabled=true)
         this.goalSelector.addGoal(2, new com.aiworkbench.companion.entity.goal.CompanionGuardGoal(this, 1.0, 10.0F));
 
-        // 3: Mine goal - mine nearby stone/ore blocks (only when mineModeEnabled=true)
-        this.goalSelector.addGoal(3, new com.aiworkbench.companion.entity.goal.CompanionMineGoal(this, 0.8, 6.0F));
-
-        // 4: Chop goal - chop nearby trees/logs (only when chopModeEnabled=true)
-        this.goalSelector.addGoal(4, new com.aiworkbench.companion.entity.goal.CompanionChopGoal(this, 0.8, 8.0F));
+        // 3: Gather goal - smart resource gathering (ores + logs, when gatherModeEnabled)
+        this.goalSelector.addGoal(3, new com.aiworkbench.companion.entity.goal.CompanionGatherGoal(this, 0.8, 8.0F));
 
         // 5: Follow owner when too far away
         // minDistance=2 blocks (stop), maxDistance=16 blocks (follow)
@@ -393,7 +442,10 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         // 8: Random look around when idle
         this.goalSelector.addGoal(8, new RandomLookAroundGoal(this));
 
-        AICompanionMod.LOGGER.info("[AutomatonEntity] Goals registered: Float, Jump, Guard, Mine, Chop, FollowOwner, Wander, LookAt, RandomLook");
+        // 9: Survival — nighttime lighting + shelter
+        this.goalSelector.addGoal(9, new com.aiworkbench.companion.entity.goal.CompanionSurvivalGoal(this));
+
+        AICompanionMod.LOGGER.info("[AutomatonEntity] Goals registered: Float, Jump, Guard, Gather, Follow, Wander, Look, Random, Survival");
     }
 
     // ==================== Entity Behavior ====================
@@ -552,6 +604,17 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
                     AICompanionMod.companionManager.addCompanion(ownerUuid, newCompanion);
                 }
 
+                // 保存新同伴UUID到玩家NBT（防止下次登录产生重复同伴）
+                net.minecraft.nbt.CompoundTag nbt = player.getPersistentData();
+                nbt.putUUID("aicompanion.companion_uuid", newCompanion.getUUID());
+                nbt.putDouble("aicompanion.companion_x", newCompanion.getX());
+                nbt.putDouble("aicompanion.companion_y", newCompanion.getY());
+                nbt.putDouble("aicompanion.companion_z", newCompanion.getZ());
+                nbt.putString("aicompanion.companion_dim", newCompanion.level().dimension().location().toString());
+                // 清理旧格式残留
+                nbt.remove("aicompanion.companion_uuid_mostMost");
+                nbt.remove("aicompanion.companion_uuid_mostLeast");
+
                 player.sendSystemMessage(net.minecraft.network.chat.Component.literal("§a你的同伴已复活！等级: " + savedLevel));
             }
         ));
@@ -594,7 +657,8 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             return;
         }
 
-        // Decrement toggle cooldown
+        // Decrement cooldowns
+        if (modeToggleCooldown > 0) modeToggleCooldown--;
         if (stopToggleCooldown > 0) stopToggleCooldown--;
 
         // Patrol behavior - wander around patrol center
@@ -651,6 +715,16 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             pickupNearbyItems();
         }
 
+        // Auto-equip check every 40 ticks (2 seconds) — 确保模式切换后装备正确
+        if (tickCount % 40 == 0) {
+            autoEquip();
+        }
+
+        // 更新药水Buff效果
+        if (tickCount % 20 == 0) {
+            applyBuffEffects();
+        }
+
         // Memory summarizer tick every 1200 ticks (60 seconds)
         if (tickCount % 1200 == 0 && AICompanionMod.memoryManager != null) {
             AICompanionMod.memoryManager.tick();
@@ -677,6 +751,107 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             this.setCustomName(net.minecraft.network.chat.Component.literal(" "));
             dialogueText = "";
         }
+
+        // AutoCurriculum evaluation — 仅在非战斗、非技能执行时评估（服务端）
+        if (!this.level().isClientSide && !isSkillActive() && isAlive() && getOwner() != null) {
+            curriculumTickCounter++;
+            if (curriculumTickCounter >= CURRICULUM_EVAL_INTERVAL) {
+                curriculumTickCounter = 0;
+                evaluateCurriculum();
+            }
+            // LLM 采集战略 — 采集模式下每30秒获取一次LLM战略指导
+            if (gatherModeEnabled && curriculumTickCounter == CURRICULUM_EVAL_INTERVAL / 2) {
+                evaluateGatherStrategyAsync();
+            }
+        }
+    }
+
+    /**
+     * LLM 采集战略层：异步发送感知数据给 Ollama，获取优先采集目标。
+     * 在采集模式下每30秒运行一次，不阻塞游戏主线程。
+     */
+    private void evaluateGatherStrategyAsync() {
+        ServerPlayer owner = getOwner();
+        if (owner == null) return;
+
+        // 使用缓存的感知数据生成资源摘要
+        PerceptionEngine.PerceptionData perception = getOrGatherPerception();
+        java.util.List<String> resources = perception != null ?
+            com.aiworkbench.companion.entity.goal.CompanionGatherGoal.getResourceSummary(this, 8) :
+            java.util.Collections.emptyList();
+        if (resources.isEmpty()) return;
+
+        // 构建提示词——包含资源、背包、上次建议的反馈
+        StringBuilder ctx = new StringBuilder();
+        ctx.append("你是Minecraft中的AI同伴。当前在采集模式下，请分析环境并给出优先级建议。\n\n");
+        ctx.append("## 附近资源\n");
+        int count = 0;
+        for (String r : resources) {
+            if (count >= 15) break;
+            String name = r.contains("@") ? r.substring(0, r.indexOf('@')) : r;
+            ctx.append("- ").append(name);
+            count++;
+            if (count < Math.min(resources.size(), 15)) ctx.append("\n");
+        }
+        ctx.append("\n## 状态\n");
+        ctx.append("- 位置: ").append(blockPosition().toShortString()).append("\n");
+        ctx.append("- 背包: ").append(getUsedInventorySlots()).append("/").append(getInventorySize()).append("\n");
+        ctx.append("- 当前优先: ").append(String.join(",", gatherPriorityResources)).append("\n");
+
+        // 上次LLM建议的执行反馈
+        ctx.append("\n请分析以上数据，回复JSON: {\"priority\":[\"资源1\",\"资源2\"],\"reason\":\"简短理由\"}\n");
+        ctx.append("资源名只用英文：iron/coal/gold/diamond/copper/redstone/lapis/emerald/log\n");
+        ctx.append("最多5个，不要重复，不要包含stone/dirt/cobblestone。reason用中文，15字以内。");
+
+        String model = com.aiworkbench.companion.CompanionConfig.getModel(owner.getUUID());
+        String promptStr = ctx.toString();
+
+        java.util.concurrent.CompletableFuture.runAsync(() -> {
+            try {
+                java.util.LinkedHashMap<String, Object> opts = new java.util.LinkedHashMap<>();
+                opts.put("temperature", 0.1);
+                opts.put("num_predict", 100);
+                String content = com.aiworkbench.companion.ai.OllamaClient.chat(
+                    model, null, promptStr, opts, 15000, 2);
+                if (content == null || content.isEmpty()) return;
+
+                java.util.Map<String, Object> parsed = com.aiworkbench.companion.ai.OllamaClient.extractJson(content);
+                if (parsed == null) return;
+
+                @SuppressWarnings("unchecked")
+                java.util.List<String> priorities = (java.util.List<String>) parsed.get("priority");
+                if (priorities != null && !priorities.isEmpty()) {
+                    java.util.List<String> filtered = new java.util.ArrayList<>();
+                    for (String p : priorities) {
+                        String t = p.trim().toLowerCase();
+                        if (t.isEmpty() || t.equals("stone") || t.equals("dirt")
+                            || t.equals("cobblestone") || t.equals("gravel") || t.equals("sand"))
+                            continue;
+                        filtered.add(t);
+                    }
+                    if (!filtered.isEmpty()) {
+                        String joined = String.join(",", filtered);
+                        if (getServer() != null) {
+                            getServer().execute(() -> {
+                                setGatherPriority(joined);
+                                showDialogue("§bLLM: " + joined, 60);
+                                AICompanionMod.LOGGER.info("[LLMStrategy] {}", joined);
+                            });
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                AICompanionMod.LOGGER.warn("[LLMStrategy] Error: {}", e.getMessage());
+            }
+        });
+    }
+
+    private int getUsedInventorySlots() {
+        int used = 0;
+        for (int i = 0; i < getInventorySize(); i++) {
+            if (!getItem(i).isEmpty()) used++;
+        }
+        return used;
     }
 
     /**
@@ -718,10 +893,13 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             }
         }
 
-        // Pick up items in range (apply valuable filter if enabled)
+        // Pick up items in range, sorted by priority (valuable first)
         int picked = 0;
-        for (net.minecraft.world.entity.item.ItemEntity item :
-                this.level().getEntitiesOfClass(net.minecraft.world.entity.item.ItemEntity.class, pickupBounds)) {
+        java.util.List<net.minecraft.world.entity.item.ItemEntity> candidates = new java.util.ArrayList<>(
+            this.level().getEntitiesOfClass(net.minecraft.world.entity.item.ItemEntity.class, pickupBounds));
+        // Sort by priority: valuable > tools > food > materials > rest
+        candidates.sort((a, b) -> Integer.compare(pickupPriority(b), pickupPriority(a)));
+        for (net.minecraft.world.entity.item.ItemEntity item : candidates) {
             if (item.isPickable() && item.isAlive() && item.tickCount > 10) {
                 // 贵重物品过滤
                 if (pickupOnlyValuable && !isValuableItem(item.getItem().getItem())) continue;
@@ -747,56 +925,104 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
      * Scan inventory and auto-equip the best weapons and armor.
      * Compares attack damage for weapons, armor value for armor pieces.
      */
+    /**
+     * 模式感知自动装备：根据当前模式优先装备合适的工具和防具。
+     * - 挖掘模式 → 最好的镐子
+     * - 砍伐模式 → 最好的斧头
+     * - 守护模式 → 最好的剑 + 全身护甲
+     * - 跟随模式 → 卸下主手装备（外观）
+     */
+    /** 通知实体：玩家手动操作了装备槽，autoEquip短时间内不覆盖 */
+    public void notifyManualEquip() {
+        this.lastManualEquipTick = this.level().getGameTime();
+    }
+
+    /** 背包GUI打开/关闭时调用，暂停/恢复自动装备 */
+    public void setSuppressAutoEquip(boolean suppress) {
+        this.suppressAutoEquip = suppress;
+        if (suppress) {
+            AICompanionMod.LOGGER.debug("[AutomatonEntity] Auto-equip suppressed (backpack open)");
+        } else {
+            AICompanionMod.LOGGER.debug("[AutomatonEntity] Auto-equip resumed (backpack closed)");
+        }
+    }
+
     private void autoEquip() {
         if (this.level().isClientSide) return;
 
+        // 背包打开期间暂停自动装备，防止覆盖玩家的手动操作
+        if (suppressAutoEquip) return;
+
+        // 玩家10秒内手动操作了装备 → 尊重玩家选择，不自动覆盖
+        if (this.level().getGameTime() - lastManualEquipTick < 200) return;
+
+        if (gatherModeEnabled) {
+            // 采集模式：GatherGoal内部自动切换工具，autoEquip不干预
+            return;
+        } else if (guardModeEnabled) {
+            ItemStack current = getItemBySlot(EquipmentSlot.MAINHAND);
+            if (current.isEmpty() || !(current.getItem() instanceof net.minecraft.world.item.SwordItem)) {
+                equipBestTool(net.minecraft.world.item.SwordItem.class);
+            }
+            equipBestArmor();
+        } else {
+            // 跟随模式：不再强制卸下武器，尊重玩家选择
+            // 只自动装备护甲
+            equipBestArmor();
+        }
+    }
+
+    /** 在背包中找到最好的指定类型工具并装备到主手 */
+    private void equipBestTool(Class<?> toolClass) {
+        int bestSlot = -1;
+        float bestSpeed = 0;
         for (int i = 0; i < INVENTORY_SIZE; i++) {
             ItemStack stack = this.inventory.get(i);
             if (stack.isEmpty()) continue;
-
-            EquipmentSlot naturalSlot = Mob.getEquipmentSlotForItem(stack);
-            ItemStack currentlyEquipped = this.getItemBySlot(naturalSlot);
-
-            // Skip if current equipment is better or equal
-            if (!currentlyEquipped.isEmpty() && !isEquipmentUpgrade(stack, currentlyEquipped, naturalSlot)) {
-                continue;
+            if (toolClass.isInstance(stack.getItem())) {
+                float speed = stack.getDestroySpeed(net.minecraft.world.level.block.Blocks.STONE.defaultBlockState());
+                if (speed > bestSpeed) {
+                    bestSpeed = speed;
+                    bestSlot = i;
+                }
             }
-
-            // Swap: put currently equipped item into inventory, equip new item
-            this.inventory.set(i, currentlyEquipped.copy());
-            this.setItemSlot(naturalSlot, stack.copy());
+        }
+        if (bestSlot >= 0) {
+            ItemStack current = getItemBySlot(EquipmentSlot.MAINHAND);
+            ItemStack newTool = this.inventory.get(bestSlot).copy();
+            this.inventory.set(bestSlot, current.copy());
+            setItemSlot(EquipmentSlot.MAINHAND, newTool);
         }
     }
 
-    /**
-     * Compare two items for the given equipment slot.
-     * Returns true if newItem is an upgrade over currentItem.
-     */
-    private boolean isEquipmentUpgrade(ItemStack newItem, ItemStack currentItem, EquipmentSlot slot) {
-        double newVal = getEquipmentScore(newItem, slot);
-        double curVal = getEquipmentScore(currentItem, slot);
-        // Only upgrade if new item is at least 1 point better (avoids rapid swapping)
-        return newVal > curVal + 1.0;
-    }
-
-    /**
-     * Score an item for a given equipment slot.
-     * Weighs attack damage (x2), armor (x1), and toughness (x0.5).
-     */
-    private double getEquipmentScore(ItemStack stack, EquipmentSlot slot) {
-        double score = 0;
-        for (var entry : stack.getAttributeModifiers(slot).entries()) {
-            net.minecraft.world.entity.ai.attributes.Attribute attr = entry.getKey();
-            double amount = entry.getValue().getAmount();
-            if (attr.equals(Attributes.ATTACK_DAMAGE)) {
-                score += amount * 2.0;
-            } else if (attr.equals(Attributes.ARMOR)) {
-                score += amount;
-            } else if (attr.equals(Attributes.ARMOR_TOUGHNESS)) {
-                score += amount * 0.5;
+    /** 从背包中装备最好的护甲 */
+    private void equipBestArmor() {
+        EquipmentSlot[] armorSlots = {EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET};
+        for (EquipmentSlot slot : armorSlots) {
+            int bestIdx = -1;
+            double bestArmor = -1;
+            for (int i = 0; i < INVENTORY_SIZE; i++) {
+                ItemStack stack = this.inventory.get(i);
+                if (stack.isEmpty()) continue;
+                if (Mob.getEquipmentSlotForItem(stack) != slot) continue;
+                double armorValue = 0;
+                for (var entry : stack.getAttributeModifiers(slot).entries()) {
+                    if (entry.getKey().equals(Attributes.ARMOR)) {
+                        armorValue += entry.getValue().getAmount();
+                    }
+                }
+                if (armorValue > bestArmor) {
+                    bestArmor = armorValue;
+                    bestIdx = i;
+                }
+            }
+            if (bestIdx >= 0) {
+                ItemStack current = getItemBySlot(slot);
+                ItemStack newArmor = this.inventory.get(bestIdx).copy();
+                this.inventory.set(bestIdx, current.copy());
+                setItemSlot(slot, newArmor);
             }
         }
-        return score;
     }
 
     /**
@@ -804,7 +1030,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
      */
     private void tickPatrol() {
         if (!patrolModeEnabled || patrolCenter == null) return;
-        if (followModeActive || guardModeEnabled || mineModeEnabled || chopModeEnabled) return;
+        if (followModeActive || guardModeEnabled || gatherModeEnabled) return;
         if (movementStopped || hidden) return;
 
         // Check if we've reached our current patrol target
@@ -940,24 +1166,22 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         // Cooldown: don't react more than once every 30 seconds (600 ticks) for warnings
         if (tickCount - lastSituationWarningTick < 600) return;
 
-        PerceptionEngine.PerceptionData perception = PerceptionEngine.gatherPerception(this);
+        // 共享感知缓存：多个系统共用一次扫描
+        PerceptionEngine.PerceptionData perception = getOrGatherPerception();
         if (perception == null) return;
 
-        // ==================== CRITICAL DANGERS (Immediate Warning, No Question) ====================
+        // ==================== 危险警告（不取消技能，同伴自行判断） ====================
         if (perception.dangerLava) {
-            showWarning("主人，小心岩浆！");
-            if (skillEngine.isActive()) skillEngine.cancelSkill(this);
+            showWarning("lava", "主人，小心岩浆！");
             return;
         } else if (perception.dangerFall) {
-            showWarning("注意脚下，别摔下去了！");
+            showWarning("fall", "注意脚下，别摔下去了！");
             return;
         } else if (perception.dangerHostile) {
-            showWarning("有敌对生物在旁边！");
-            if (skillEngine.isActive()) skillEngine.cancelSkill(this);
+            showWarning("hostile", "有敌对生物在旁边！");
             return;
         } else if (perception.dangerSuffocation) {
-            showWarning("主人，这里会窒息！");
-            if (skillEngine.isActive()) skillEngine.cancelSkill(this);
+            showWarning("suffocation", "主人，这里会窒息！");
             return;
         }
 
@@ -1011,9 +1235,12 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     /**
      * Show a warning message (bypasses question system, immediate display)
      */
-    private void showWarning(String message) {
+    private void showWarning(String dangerType, String message) {
+        // 同类型危险10秒内不重复提醒
+        if (dangerType.equals(lastDangerType) && tickCount - lastSituationWarningTick < 200) return;
+        lastDangerType = dangerType;
         AICompanionMod.LOGGER.info("[AutomatonEntity] Warning: " + message);
-        showDialogue(message, 80);  // Show for 4 seconds
+        showDialogue(message, 80);
         lastSituationWarningTick = tickCount;
     }
 
@@ -1098,10 +1325,22 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             entity.ownerUUID = owner.getUUID();
             entity.entityData.set(DATA_OWNER_UUID, Optional.of(owner.getUUID()));
             entity.setPos(owner.getX() + 2, owner.getY(), owner.getZ() + 2);
-            // Set display name based on owner
             entity.setCustomName(net.minecraft.network.chat.Component.literal(owner.getName().getString() + "'s Companion"));
         }
+        // 出生自带基础工具
+        entity.giveStarterEquipment();
         return entity;
+    }
+
+    /**
+     * 给予同伴出生基础工具：石镐(采矿)、石斧(砍树)、石剑(战斗)。
+     */
+    private void giveStarterEquipment() {
+        this.inventory.set(0, new ItemStack(net.minecraft.world.item.Items.STONE_PICKAXE));
+        this.inventory.set(1, new ItemStack(net.minecraft.world.item.Items.STONE_AXE));
+        this.inventory.set(2, new ItemStack(net.minecraft.world.item.Items.STONE_SWORD));
+        // Auto-equip the best tool
+        autoEquip();
     }
 
     // ==================== NBT Serialization ====================
@@ -1113,7 +1352,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         if (tag.contains("CharacterId")) {
             this.characterId = tag.getString("CharacterId");
         }
-        if (tag.hasUUID("OwnerUUID")) {
+        if (tag.contains("OwnerUUID")) {
             this.ownerUUID = tag.getUUID("OwnerUUID");
             this.entityData.set(DATA_OWNER_UUID, Optional.of(this.ownerUUID));
         }
@@ -1199,14 +1438,12 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             this.entityData.set(DATA_WORKING_MODE, mode);
             // Reset all mode flags, then set the active one
             guardModeEnabled = false;
-            mineModeEnabled = false;
-            chopModeEnabled = false;
+            gatherModeEnabled = false;
             patrolModeEnabled = false;
             followModeActive = false;
             switch (mode) {
                 case "guard" -> guardModeEnabled = true;
-                case "mine" -> mineModeEnabled = true;
-                case "chop" -> chopModeEnabled = true;
+                case "gather" -> gatherModeEnabled = true;
                 case "patrol" -> patrolModeEnabled = true;
                 default -> followModeActive = true;
             }
@@ -1214,10 +1451,10 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
 
         // Load explicit mode flags (override WorkingMode-derived values)
         if (tag.contains("GuardMode")) guardModeEnabled = tag.getBoolean("GuardMode");
-        if (tag.contains("MineMode")) mineModeEnabled = tag.getBoolean("MineMode");
-        if (tag.contains("ChopMode")) chopModeEnabled = tag.getBoolean("ChopMode");
+        if (tag.contains("GatherMode")) gatherModeEnabled = tag.getBoolean("GatherMode");
         if (tag.contains("PatrolMode")) patrolModeEnabled = tag.getBoolean("PatrolMode");
         if (tag.contains("FollowModeActive")) followModeActive = tag.getBoolean("FollowModeActive");
+        if (tag.contains("AutonomousMode")) autonomousMode = tag.getBoolean("AutonomousMode");
 
         // Load persistent config state
         if (tag.contains("Hidden")) hidden = tag.getBoolean("Hidden");
@@ -1268,10 +1505,10 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
 
         // Save mode flags explicitly (defensive against WorkingMode loss)
         tag.putBoolean("GuardMode", guardModeEnabled);
-        tag.putBoolean("MineMode", mineModeEnabled);
-        tag.putBoolean("ChopMode", chopModeEnabled);
+        tag.putBoolean("GatherMode", gatherModeEnabled);
         tag.putBoolean("PatrolMode", patrolModeEnabled);
         tag.putBoolean("FollowModeActive", followModeActive);
+        tag.putBoolean("AutonomousMode", autonomousMode);
 
         // Save persistent config state
         tag.putBoolean("Hidden", hidden);
@@ -1317,7 +1554,11 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
 
     // ==================== Getters and Setters ====================
 
-    public UUID getOwnerUUID() { return ownerUUID; }
+    public UUID getOwnerUUID() {
+        // 优先读本地字段；客户端侧回退到同步数据（ownerUUID从未被客户端设置过）
+        if (ownerUUID != null) return ownerUUID;
+        return this.entityData.get(DATA_OWNER_UUID).orElse(null);
+    }
     public void setOwnerUUID(UUID uuid) {
         this.ownerUUID = uuid;
         if (uuid != null) {
@@ -1385,46 +1626,30 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
      * - If in task mode: disable all tasks and return to follow mode
      */
     public boolean toggleFollowMode() {
-        // Mode cycle: 0=follow, 1=guard, 2=mine, 3=chop
+        if (modeToggleCooldown > 0) return followModeActive; // 防抖
+        modeToggleCooldown = MODE_TOGGLE_COOLDOWN_TICKS;
+        // Mode cycle: follow -> guard -> gather -> follow
         if (followModeActive) {
-            // Currently following - switch to guard
             setGuardModeEnabled(true);
-            setMineModeEnabled(false);
-            setChopModeEnabled(false);
+            setGatherModeEnabled(false);
             followModeActive = false;
             this.entityData.set(DATA_WORKING_MODE, "guard");
             showDialogue("切换到守护模式", 60);
-            AICompanionMod.LOGGER.info("[AutomatonEntity] F key: Switched to guard mode");
+            AICompanionMod.LOGGER.info("[AutomatonEntity] V key: Switched to guard mode");
         } else if (guardModeEnabled) {
-            // Guard -> Mine
             setGuardModeEnabled(false);
-            setMineModeEnabled(true);
-            setChopModeEnabled(false);
-            this.entityData.set(DATA_WORKING_MODE, "mine");
-            showDialogue("切换到挖掘模式", 60);
-            AICompanionMod.LOGGER.info("[AutomatonEntity] F key: Switched to mine mode");
-        } else if (mineModeEnabled) {
-            // Mine -> Chop
-            setGuardModeEnabled(false);
-            setMineModeEnabled(false);
-            setChopModeEnabled(true);
-            this.entityData.set(DATA_WORKING_MODE, "chop");
-            showDialogue("切换到砍伐模式", 60);
-            AICompanionMod.LOGGER.info("[AutomatonEntity] F key: Switched to chop mode");
-        } else if (chopModeEnabled) {
-            // Chop -> Follow
-            setGuardModeEnabled(false);
-            setMineModeEnabled(false);
-            setChopModeEnabled(false);
-            followModeActive = true;
-            this.entityData.set(DATA_WORKING_MODE, "follow");
-            showDialogue("切换到跟随模式", 60);
-            AICompanionMod.LOGGER.info("[AutomatonEntity] F key: Switched to follow mode");
+            setGatherModeEnabled(true);
+            this.entityData.set(DATA_WORKING_MODE, "gather");
+            showDialogue("切换到采集模式", 60);
+            AICompanionMod.LOGGER.info("[AutomatonEntity] V key: Switched to gather mode");
         } else {
-            // Fallback -> Follow
+            // gather -> follow (or fallback)
+            setGuardModeEnabled(false);
+            setGatherModeEnabled(false);
             followModeActive = true;
             this.entityData.set(DATA_WORKING_MODE, "follow");
             showDialogue("切换到跟随模式", 60);
+            AICompanionMod.LOGGER.info("[AutomatonEntity] V key: Switched to follow mode");
         }
         return followModeActive;
     }
@@ -1436,8 +1661,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     public void returnToFollow() {
         playModeSwitchSound();
         setGuardModeEnabled(false);
-        setMineModeEnabled(false);
-        setChopModeEnabled(false);
+        setGatherModeEnabled(false);
         followModeActive = true;
         this.entityData.set(DATA_WORKING_MODE, "follow");
         showDialogue("返回跟随模式", 60);
@@ -1506,8 +1730,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         if (enabled) {
             this.patrolCenter = this.getOnPos();
             setGuardModeEnabled(false);
-            setMineModeEnabled(false);
-            setChopModeEnabled(false);
+            setGatherModeEnabled(false);
             followModeActive = false;
             this.entityData.set(DATA_WORKING_MODE, "patrol");
             showDialogue("巡逻模式", 60);
@@ -1700,6 +1923,37 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     }
 
     /**
+     * 获取有效挖掘速度——完全复刻原版玩家公式。
+     * 含效率附魔、急迫/挖掘疲劳效果，与玩家挖掘行为一致。
+     */
+    public float getEffectiveDigSpeed(BlockState state) {
+        ItemStack tool = getEquippedTool();
+        float speed = tool.isEmpty() ? 1.0f : tool.getDestroySpeed(state);
+
+        // 效率附魔（仅在基础速度>1且工具类型正确时生效）
+        if (speed > 1.0f && tool.isCorrectToolForDrops(state)) {
+            int efficiency = net.minecraft.world.item.enchantment.EnchantmentHelper.getBlockEfficiency(this);
+            if (efficiency > 0) {
+                speed += efficiency * efficiency + 1;
+            }
+        }
+
+        // 急迫效果（每级+20%）
+        if (hasEffect(net.minecraft.world.effect.MobEffects.DIG_SPEED)) {
+            int amp = getEffect(net.minecraft.world.effect.MobEffects.DIG_SPEED).getAmplifier();
+            speed *= 1.0f + (amp + 1) * 0.2f;
+        }
+
+        // 挖掘疲劳（每级×0.3）
+        if (hasEffect(net.minecraft.world.effect.MobEffects.DIG_SLOWDOWN)) {
+            int amp = getEffect(net.minecraft.world.effect.MobEffects.DIG_SLOWDOWN).getAmplifier();
+            speed *= (float) Math.pow(0.3, amp + 1);
+        }
+
+        return Math.max(speed, 1.0f);
+    }
+
+    /**
      * Get the fortune level on the currently held tool
      */
     public int getFortuneLevel() {
@@ -1785,42 +2039,36 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         }
     }
 
-    // ==================== Mine Mode ====================
+    // ==================== Gather Mode (智能统一采集) ====================
 
-    /**
-     * Check if mine mode is enabled
-     */
-    public boolean isMineModeEnabled() {
-        return mineModeEnabled;
+    public boolean isGatherModeEnabled() {
+        return gatherModeEnabled;
     }
 
-    /**
-     * Enable or disable mine mode
-     */
-    public void setMineModeEnabled(boolean enabled) {
+    public void setGatherModeEnabled(boolean enabled) {
         playModeSwitchSound();
-        this.mineModeEnabled = enabled;
-        this.entityData.set(DATA_WORKING_MODE, enabled ? "mine" : getModeDataString());
-        AICompanionMod.LOGGER.info("[AutomatonEntity] Mine mode: " + (enabled ? "ENABLED" : "DISABLED"));
+        this.gatherModeEnabled = enabled;
+        if (enabled) {
+            setGuardModeEnabled(false);
+            followModeActive = false;
+        }
+        this.entityData.set(DATA_WORKING_MODE, enabled ? "gather" : getModeDataString());
+        AICompanionMod.LOGGER.info("[AutomatonEntity] Gather mode: " + (enabled ? "ENABLED" : "DISABLED"));
     }
 
-    // ==================== Chop Mode ====================
+    /** "all", "ores", "wood" */
+    public String getGatherFilter() { return gatherFilter; }
 
-    /**
-     * Check if chop mode is enabled
-     */
-    public boolean isChopModeEnabled() {
-        return chopModeEnabled;
-    }
+    public void setGatherFilter(String filter) { this.gatherFilter = filter; }
 
-    /**
-     * Enable or disable chop mode
-     */
-    public void setChopModeEnabled(boolean enabled) {
-        playModeSwitchSound();
-        this.chopModeEnabled = enabled;
-        this.entityData.set(DATA_WORKING_MODE, enabled ? "chop" : getModeDataString());
-        AICompanionMod.LOGGER.info("[AutomatonEntity] Chop mode: " + (enabled ? "ENABLED" : "DISABLED"));
+    /** LLM-set priority resources (substrings like "iron", "diamond") */
+    public java.util.Set<String> getGatherPriorityResources() { return gatherPriorityResources; }
+
+    public void setGatherPriority(String resources) {
+        gatherPriorityResources.clear();
+        for (String r : resources.split("[,\\s]+")) {
+            if (!r.isEmpty()) gatherPriorityResources.add(r.trim().toLowerCase());
+        }
     }
 
     // ==================== Item Collection ====================
@@ -1868,8 +2116,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
      */
     public String getCurrentModeString() {
         if (guardModeEnabled) return "§c守护中";
-        if (mineModeEnabled) return "§b挖掘中";
-        if (chopModeEnabled) return "§6砍伐中";
+        if (gatherModeEnabled) return "§6采集中";
         return "§a跟随中";
     }
 
@@ -1893,7 +2140,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     @Override
     public net.minecraft.world.inventory.AbstractContainerMenu createMenu(int containerId,
             net.minecraft.world.entity.player.Inventory playerInv, net.minecraft.world.entity.player.Player player) {
-        return new CompanionContainer(containerId, playerInv, this);
+        return new CompanionContainer(containerId, playerInv, this.getId());
     }
 
     /**
@@ -1901,13 +2148,14 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
      */
     private String getModeDataString() {
         if (guardModeEnabled) return "guard";
-        if (mineModeEnabled) return "mine";
-        if (chopModeEnabled) return "chop";
+        if (gatherModeEnabled) return "gather";
         if (followModeActive) return "follow";
         return "follow";
     }
 
     // ==================== Level & XP System ====================
+
+    public int getTickCounter() { return tickCount; }
 
     public int getLevel() { return this.entityData.get(DATA_LEVEL); }
     public int getXp() { return this.entityData.get(DATA_XP); }
@@ -1939,6 +2187,38 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     }
 
     /**
+     * 根据方块类型计算采矿XP奖励。
+     * 稀有矿石和深层变种给予更多XP。
+     */
+    public void grantMiningXp(net.minecraft.world.level.block.state.BlockState state) {
+        String name = state.getBlock().builtInRegistryHolder().key().location().getPath();
+        int xp;
+        if (name.contains("diamond") || name.contains("emerald")) {
+            xp = 25;
+        } else if (name.contains("ancient_debris")) {
+            xp = 50;
+        } else if (name.contains("netherite")) {
+            xp = 40;
+        } else if (name.contains("gold") || name.contains("lapis")) {
+            xp = 15;
+        } else if (name.contains("redstone")) {
+            xp = 12;
+        } else if (name.contains("deepslate")) {
+            xp = 18;
+        } else {
+            xp = 10;
+        }
+        grantXp(xp);
+    }
+
+    /**
+     * 砍伐树木获得XP（每根原木固定值）。
+     */
+    public void grantChoppingXp() {
+        grantXp(10);
+    }
+
+    /**
      * Trigger level-up effects and grant stat points.
      * Stats are no longer auto-applied; player allocates points manually.
      */
@@ -1956,8 +2236,9 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
 
         ServerPlayer owner = getOwner();
         if (owner != null) {
+            String name = this.getCustomName() != null ? this.getCustomName().getString() : "同伴";
             owner.sendSystemMessage(net.minecraft.network.chat.Component.literal(
-                "§6§l✦ " + this.getCustomName().getString() + " 升级到 Lv." + level
+                "§6§l✦ " + name + " 升级到 Lv." + level
                 + "！获得 " + POINTS_PER_LEVEL + " 属性点"));
             owner.sendSystemMessage(net.minecraft.network.chat.Component.literal(
                 "§7使用 §f/companion stats add <属性> <点数> §7分配属性点"));
@@ -1997,6 +2278,51 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         AICompanionMod.LOGGER.info("[Stats] Applied: HP={}, ATK={}, SPD={}, ARMOR={} | str={}, vit={}, spd={}, def={}",
             (int)newHealth, String.format("%.1f", newAttack), String.format("%.2f", newSpeed),
             String.format("%.1f", newArmor), strengthPoints, vitalityPoints, speedPoints, defensePoints);
+    }
+
+    /**
+     * 每20 tick应用药水Buff效果到属性上。
+     * 急迫→挖掘速度  力量→攻击力  速度→移速  抗性→减伤
+     */
+    private void applyBuffEffects() {
+        var haste = this.getEffect(net.minecraft.world.effect.MobEffects.DIG_SPEED);
+        var strength = this.getEffect(net.minecraft.world.effect.MobEffects.DAMAGE_BOOST);
+        var speed = this.getEffect(net.minecraft.world.effect.MobEffects.MOVEMENT_SPEED);
+        var resistance = this.getEffect(net.minecraft.world.effect.MobEffects.DAMAGE_RESISTANCE);
+
+        // Haste: 挖掘速度加成 (用于Goal中的挖掘计算)
+        int hasteLevel = haste != null ? haste.getAmplifier() + 1 : 0;
+
+        // Strength: +3攻击力/级
+        var atkAttr = this.getAttribute(Attributes.ATTACK_DAMAGE);
+        if (atkAttr != null) {
+            double baseAtk = atkAttr.getBaseValue();
+            double strBonus = strength != null ? (strength.getAmplifier() + 1) * 3.0 : 0;
+            atkAttr.setBaseValue(baseAtk + strBonus);
+        }
+
+        // Speed: +20%移速/级
+        var spdAttr = this.getAttribute(Attributes.MOVEMENT_SPEED);
+        if (spdAttr != null) {
+            double baseSpd = spdAttr.getBaseValue();
+            double spdBonus = speed != null ? baseSpd * 0.2 * (speed.getAmplifier() + 1) : 0;
+            spdAttr.setBaseValue(baseSpd + spdBonus);
+        }
+
+        // Resistance: +2护甲/级
+        var armAttr = this.getAttribute(Attributes.ARMOR);
+        if (armAttr != null) {
+            double baseArm = armAttr.getBaseValue();
+            double resBonus = resistance != null ? (resistance.getAmplifier() + 1) * 2.0 : 0;
+            armAttr.setBaseValue(baseArm + resBonus);
+        }
+    }
+
+    /** 检查同伴是否有急迫效果，返回加成倍率 */
+    public float getHasteBonus() {
+        var haste = this.getEffect(net.minecraft.world.effect.MobEffects.DIG_SPEED);
+        if (haste == null) return 0f;
+        return (haste.getAmplifier() + 1) * 0.2f; // 每级+20%
     }
 
     /**
@@ -2131,6 +2457,9 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     private void checkAutoRecall() {
         if (this.level().isClientSide) return;
 
+        // 任务模式中不自动召回（让同伴完成采矿/砍树/防守）
+        if (!followModeActive) return;
+
         ServerPlayer owner = getOwner();
         if (owner == null) return;
 
@@ -2210,6 +2539,97 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
 
     public void setSkillActive(boolean active) {
         this.skillActive = active;
+    }
+
+    // ==================== AutoCurriculum / Autonomous Mode ====================
+
+    /**
+     * 评估环境并生成课程提议。
+     * 自主模式下直接执行，手动模式下显示提议等待玩家确认。
+     */
+    private void evaluateCurriculum() {
+        CurriculumProposal proposal = AutoCurriculum.proposeNextTask(this);
+        if (proposal == null) return;
+
+        if (autonomousMode) {
+            // 自主模式：直接执行
+            executeCurriculumProposal(proposal);
+        } else {
+            // 手动模式：头顶显示提议，等待玩家确认
+            String msg = "§e💡 " + proposal.taskDescription + "？ §7[/companion confirm]";
+            showDialogue(msg, 120); // 6秒
+            this.pendingProposal = proposal;
+        }
+    }
+
+    /**
+     * 执行课程提议 —— 根据建议的技能名查找并启动技能。
+     */
+    private void executeCurriculumProposal(CurriculumProposal proposal) {
+        if (proposal.hasSkill()) {
+            // "gather" is a special action that enables continuous gathering mode
+            if ("gather".equals(proposal.suggestedSkill)) {
+                setGatherModeEnabled(true);
+                showDialogue("§a⛏ " + proposal.taskDescription, 60);
+                AICompanionMod.LOGGER.info("[AutoCurriculum] Enabled gather mode: {}", proposal.taskDescription);
+                return;
+            }
+            Skill skill = AICompanionMod.skillLibrary.getPreset(proposal.suggestedSkill);
+            if (skill != null) {
+                this.skillEngine.startSkill(skill, this);
+                showDialogue("§a🔧 " + proposal.taskDescription, 60);
+            } else {
+                // Fallback: if skill not registered, try enabling gather mode for resource proposals
+                String skillName = proposal.suggestedSkill;
+                if (skillName != null && (skillName.startsWith("mine") || skillName.contains("Wood") || skillName.contains("collect"))) {
+                    setGatherModeEnabled(true);
+                    showDialogue("§a⛏ " + proposal.taskDescription, 60);
+                }
+            }
+        }
+    }
+
+    /**
+     * 玩家确认当前待处理的课程提议。
+     */
+    public void confirmProposal() {
+        if (pendingProposal != null) {
+            executeCurriculumProposal(pendingProposal);
+            pendingProposal = null;
+        }
+    }
+
+    /**
+     * 获取当前待处理的课程提议（用于外部查询）。
+     */
+    public CurriculumProposal getPendingProposal() {
+        return pendingProposal;
+    }
+
+    /**
+     * 获取当前待处理提议的文本描述（用于 GUI 显示）。
+     */
+    public String getPendingProposalText() {
+        return pendingProposal != null ? pendingProposal.taskDescription : null;
+    }
+
+    /**
+     * 开启/关闭自主模式。
+     */
+    public void setAutonomousMode(boolean enabled) {
+        this.autonomousMode = enabled;
+        if (enabled) {
+            showDialogue("§a自主模式已开启 - 我将自行决策", 60);
+        } else {
+            showDialogue("§7自主模式已关闭 - 等待你的指令", 60);
+        }
+    }
+
+    /**
+     * 是否处于自主模式。
+     */
+    public boolean isAutonomousMode() {
+        return autonomousMode;
     }
 
     /**

@@ -33,10 +33,18 @@ public final class PresetSkillRegistry {
         registerMineStone(library);
         registerMineCoalOre(library);
         registerMineIronOre(library);
+        registerMineDiamondOre(library);
+        registerMineGoldOre(library);
+        registerMineEmeraldOre(library);
+        registerMineLapisOre(library);
+        registerMineRedstoneOre(library);
+        registerMineCopperOre(library);
         registerFightZombie(library);
         registerCollectDrops(library);
         registerCraftStick(library);
         registerCraftWoodenPickaxe(library);
+        registerCraftStonePickaxe(library);
+        registerCraftIronPickaxe(library);
         registerCraftFurnace(library);
         registerBuildShelter(library);
         registerSmeltIronIngot(library);
@@ -97,6 +105,12 @@ public final class PresetSkillRegistry {
             @Override
             public void stop(AutomatonEntity entity) {
                 entity.getNavigation().stop();
+            }
+
+            @Override
+            public void reset() {
+                target = null;
+                checkTicks = 0;
             }
 
             @Override
@@ -292,6 +306,138 @@ public final class PresetSkillRegistry {
         Skill skill = new Skill(
             "buildShelter", "建造小屋：用圆石建造一个 3×3 简易庇护所",
             List.of(), action, SkillCategory.INTERACTION, false
+        );
+        library.registerPreset(skill);
+    }
+
+    /**
+     * 挖掘钻石矿：移动到钻石矿 → 挖掘周围所有钻石矿。
+     */
+    private static void registerMineDiamondOre(SkillLibrary library) {
+        SkillAction action = new SkillAction(List.of(
+            EquipItemAction.bestToolFor("iron"),
+            new MoveToBlockAction(BlockMatcher.contains("diamond_ore")),
+            new BreakBlockAction(BlockMatcher.contains("diamond_ore"))
+        ), false);
+
+        Skill skill = new Skill(
+            "mineDiamondOre", "挖掘钻石矿：自动寻找并挖掘钻石矿",
+            List.of(), action, SkillCategory.INTERACTION, false
+        );
+        library.registerPreset(skill);
+    }
+
+    /**
+     * 挖掘金矿：移动到金矿 → 挖掘周围所有金矿。
+     */
+    private static void registerMineGoldOre(SkillLibrary library) {
+        SkillAction action = new SkillAction(List.of(
+            EquipItemAction.bestToolFor("iron"),
+            new MoveToBlockAction(BlockMatcher.contains("gold_ore")),
+            new BreakBlockAction(BlockMatcher.contains("gold_ore"))
+        ), false);
+
+        Skill skill = new Skill(
+            "mineGoldOre", "挖掘金矿：自动寻找并挖掘金矿",
+            List.of(), action, SkillCategory.INTERACTION, false
+        );
+        library.registerPreset(skill);
+    }
+
+    /**
+     * 挖掘绿宝石矿：移动到绿宝石矿 → 挖掘周围所有绿宝石矿。
+     */
+    private static void registerMineEmeraldOre(SkillLibrary library) {
+        SkillAction action = new SkillAction(List.of(
+            EquipItemAction.bestToolFor("iron"),
+            new MoveToBlockAction(BlockMatcher.contains("emerald_ore")),
+            new BreakBlockAction(BlockMatcher.contains("emerald_ore"))
+        ), false);
+
+        Skill skill = new Skill(
+            "mineEmeraldOre", "挖掘绿宝石矿：自动寻找并挖掘绿宝石矿",
+            List.of(), action, SkillCategory.INTERACTION, false
+        );
+        library.registerPreset(skill);
+    }
+
+    /**
+     * 挖掘青金石矿：移动到青金石矿 → 挖掘周围所有青金石矿。
+     */
+    private static void registerMineLapisOre(SkillLibrary library) {
+        SkillAction action = new SkillAction(List.of(
+            EquipItemAction.bestToolFor("stone"),
+            new MoveToBlockAction(BlockMatcher.contains("lapis_ore")),
+            new BreakBlockAction(BlockMatcher.contains("lapis_ore"))
+        ), false);
+
+        Skill skill = new Skill(
+            "mineLapisOre", "挖掘青金石矿：自动寻找并挖掘青金石矿",
+            List.of(), action, SkillCategory.INTERACTION, false
+        );
+        library.registerPreset(skill);
+    }
+
+    /**
+     * 挖掘红石矿：移动到红石矿 → 挖掘周围所有红石矿。
+     */
+    private static void registerMineRedstoneOre(SkillLibrary library) {
+        SkillAction action = new SkillAction(List.of(
+            EquipItemAction.bestToolFor("iron"),
+            new MoveToBlockAction(BlockMatcher.contains("redstone_ore")),
+            new BreakBlockAction(BlockMatcher.contains("redstone_ore"))
+        ), false);
+
+        Skill skill = new Skill(
+            "mineRedstoneOre", "挖掘红石矿：自动寻找并挖掘红石矿",
+            List.of(), action, SkillCategory.INTERACTION, false
+        );
+        library.registerPreset(skill);
+    }
+
+    /**
+     * 挖掘铜矿：移动到铜矿 → 挖掘周围所有铜矿。
+     */
+    private static void registerMineCopperOre(SkillLibrary library) {
+        SkillAction action = new SkillAction(List.of(
+            EquipItemAction.bestToolFor("stone"),
+            new MoveToBlockAction(BlockMatcher.contains("copper_ore")),
+            new BreakBlockAction(BlockMatcher.contains("copper_ore"))
+        ), false);
+
+        Skill skill = new Skill(
+            "mineCopperOre", "挖掘铜矿：自动寻找并挖掘铜矿",
+            List.of(), action, SkillCategory.INTERACTION, false
+        );
+        library.registerPreset(skill);
+    }
+
+    /**
+     * 合成石镐：消耗圆石 + 木棍 → 产出石镐。
+     */
+    private static void registerCraftStonePickaxe(SkillLibrary library) {
+        SkillAction action = new SkillAction(List.of(
+            new CraftItemAction(Items.STONE_PICKAXE, 1)
+        ), false);
+
+        Skill skill = new Skill(
+            "craftStonePickaxe", "合成石镐：消耗圆石和木棍合成石镐",
+            List.of(), action, SkillCategory.CRAFTING, false
+        );
+        library.registerPreset(skill);
+    }
+
+    /**
+     * 合成铁镐：消耗铁锭 + 木棍 → 产出铁镐。
+     */
+    private static void registerCraftIronPickaxe(SkillLibrary library) {
+        SkillAction action = new SkillAction(List.of(
+            new CraftItemAction(Items.IRON_PICKAXE, 1)
+        ), false);
+
+        Skill skill = new Skill(
+            "craftIronPickaxe", "合成铁镐：消耗铁锭和木棍合成铁镐",
+            List.of(), action, SkillCategory.CRAFTING, false
         );
         library.registerPreset(skill);
     }

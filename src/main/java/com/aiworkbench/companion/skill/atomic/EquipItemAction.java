@@ -110,6 +110,11 @@ public class EquipItemAction implements AtomicAction {
     }
 
     @Override
+    public void reset() {
+        done = false;
+    }
+
+    @Override
     public String getDescription() {
         return "装备物品";
     }

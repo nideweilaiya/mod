@@ -105,13 +105,14 @@ public class CompanionGuardGoal extends Goal {
         companion.setGuardTarget(null);
         companion.getNavigation().stop();
         companion.setGuardModeEnabled(false);
-        companion.setGatherModeEnabled(true);
+        // Restore to follow mode (not hardcoded gather)
+        companion.returnToFollow();
         // Instant hardcoded feedback
         companion.showDialogue("§a威胁清除", 40);
         // Record event + trigger LLM contextual dialogue
         companion.addRecentEvent("combat_end", "击败了" + enemyName);
         companion.triggerEventResponse("combat_end", java.util.Map.of("enemy", enemyName));
-        AICompanionMod.LOGGER.info("[GuardGoal] Disengaged → resume gather");
+        AICompanionMod.LOGGER.info("[GuardGoal] Disengaged → follow");
     }
 
     @Override

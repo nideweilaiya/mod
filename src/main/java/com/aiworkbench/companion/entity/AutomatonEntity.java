@@ -2,6 +2,7 @@ package com.aiworkbench.companion.entity;
 
 import com.aiworkbench.companion.AICompanionMod;
 import com.aiworkbench.companion.ai.PerceptionEngine;
+import com.aiworkbench.companion.entity.goal.AutoUpgrader;
 import com.aiworkbench.companion.entity.goal.CompanionFollowGoal;
 import com.aiworkbench.companion.skill.AutoCurriculum;
 import com.aiworkbench.companion.skill.AutoCurriculum.CurriculumProposal;
@@ -522,7 +523,8 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     @Override
     public void handleEntityEvent(byte id) {
         if (id == 4) {
-            this.swingTime = 6; // standard swing duration
+            this.swinging = true;
+            this.swingTime = 0;
         } else {
             super.handleEntityEvent(id);
         }
@@ -688,9 +690,8 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         if (hidden) {
             // Dialogue auto-hide still works when hidden
             if (!dialogueText.isEmpty() && tickCount > dialogueEndTick) {
-                this.setCustomNameVisible(false);
-                this.setCustomName(net.minecraft.network.chat.Component.literal(" "));
                 dialogueText = "";
+                updatePersistentName();
             }
             // Auto-recall still works when hidden
             if (tickCount % 20 == 0) {
@@ -705,9 +706,8 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             if (stopToggleCooldown > 0) stopToggleCooldown--;
             // Dialogue auto-hide still works
             if (!dialogueText.isEmpty() && tickCount > dialogueEndTick) {
-                this.setCustomNameVisible(false);
-                this.setCustomName(net.minecraft.network.chat.Component.literal(" "));
                 dialogueText = "";
+                updatePersistentName();
             }
             // Auto-recall still works when movement stopped
             if (tickCount % 20 == 0) {
@@ -731,6 +731,10 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             // Auto-eat: consume food from inventory when health < 50%
             if (this.getHealth() < this.getMaxHealth() * 0.5f) {
                 tryAutoEat();
+            }
+            // Auto-smelt: check if we can smelt ores (every 10s)
+            if (tickCount % 200 == 0) {
+                AutoUpgrader.trySmeltIfNeeded(this);
             }
         }
 
@@ -816,11 +820,15 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             pushAiContext();
         }
 
-        // Dialogue auto-hide
+        // Dialogue auto-hide → show persistent status
         if (!dialogueText.isEmpty() && tickCount > dialogueEndTick) {
-            this.setCustomNameVisible(false);
-            this.setCustomName(net.minecraft.network.chat.Component.literal(" "));
             dialogueText = "";
+            updatePersistentName();
+        }
+
+        // Refresh persistent name every 5 seconds
+        if (dialogueText.isEmpty() && tickCount % 100 == 0) {
+            updatePersistentName();
         }
 
         // AutoCurriculum evaluation — 仅在非战斗、非技能执行时评估（服务端）
@@ -2867,6 +2875,30 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
      */
     public void showDialogue(String text) {
         showDialogue(text, DEFAULT_DIALOGUE_DURATION_TICKS);
+    }
+
+    /** Update the persistent name tag showing mode/level when no dialogue is active */
+    private void updatePersistentName() {
+        if (!dialogueText.isEmpty()) return;
+        String mode = getModeDataString();
+        String modeIcon = switch (mode) {
+            case "guard" -> "§c🛡";
+            case "gather" -> "§6⛏";
+            case "farm" -> "§a🌾";
+            default -> "§b👤";
+        };
+        int lv = this.entityData.get(DATA_LEVEL);
+        this.setCustomName(net.minecraft.network.chat.Component.literal(
+            "§7Lv." + lv + " " + modeIcon + " §f" + getModeDisplayName()));
+        this.setCustomNameVisible(true);
+    }
+
+    private String getModeDisplayName() {
+        if (guardModeEnabled) return "守护中";
+        if (gatherModeEnabled) return "采集中";
+        if (farmModeEnabled) return "种植中";
+        if (followModeActive) return "跟随中";
+        return "待命中";
     }
 
     // ==================== RecentEvent Inner Class ====================

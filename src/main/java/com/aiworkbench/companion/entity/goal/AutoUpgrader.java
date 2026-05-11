@@ -186,12 +186,12 @@ public final class AutoUpgrader {
      * 在采集过程中定期调用，发现有机可乘时会自动放置熔炉开始冶炼。
      */
     public static boolean trySmeltIfNeeded(AutomatonEntity entity) {
-        // 检查是否需要铁锭来升级
-        boolean needIron = hasEnoughForUpgrade(entity, Items.IRON_INGOT, 3)
-            && countItem(entity, Items.IRON_INGOT) < 3
-            && countItem(entity, Items.RAW_IRON) + countItem(entity, Items.IRON_ORE) >= 1;
+        if (entity.level().isClientSide) return false;
 
-        if (!needIron) return false;
+        // 有矿可烧吗
+        boolean hasIronOre = countItem(entity, Items.IRON_ORE) + countItem(entity, Items.RAW_IRON) >= 1;
+        boolean hasGoldOre = countItem(entity, Items.GOLD_ORE) + countItem(entity, Items.RAW_GOLD) >= 1;
+        if (!hasIronOre && !hasGoldOre) return false;
 
         // 有燃料吗
         if (countItem(entity, Items.COAL) + countItem(entity, Items.CHARCOAL) == 0)
@@ -199,10 +199,16 @@ public final class AutoUpgrader {
 
         // 有熔炉吗（背包里或附近）
         BlockPos furnace = findOrPlaceFurnace(entity);
-        if (furnace == null) return false;
+        if (furnace == null) {
+            AICompanionMod.LOGGER.info("[AutoUpgrade] Smelt skipped: no furnace available");
+            return false;
+        }
 
-        // 找到熔炉→放入铁矿石+燃料
-        return startSmelting(entity, furnace);
+        // 找到熔炉→放入矿石+燃料
+        boolean result = startSmelting(entity, furnace);
+        AICompanionMod.LOGGER.info("[AutoUpgrade] Smelt attempt: ore={} coal={} result={}",
+            hasIronOre ? "iron" : "gold", countItem(entity, Items.COAL) + countItem(entity, Items.CHARCOAL), result);
+        return result;
     }
 
     private static int countItem(AutomatonEntity entity, net.minecraft.world.item.Item item) {

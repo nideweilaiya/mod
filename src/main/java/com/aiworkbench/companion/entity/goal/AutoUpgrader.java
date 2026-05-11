@@ -229,54 +229,87 @@ public final class AutoUpgrader {
         net.minecraft.world.level.Level level = entity.level();
         BlockPos origin = entity.blockPosition();
 
-        // 1. 先扫描附近16格内已有的熔炉
+        // 1. 扫描附近16格内已有熔炉（包括自己之前放的）
         for (int dx = -16; dx <= 16; dx++) {
             for (int dy = -4; dy <= 4; dy++) {
                 for (int dz = -16; dz <= 16; dz++) {
                     BlockPos p = origin.offset(dx, dy, dz);
                     if (level.getBlockState(p).getBlock() instanceof net.minecraft.world.level.block.FurnaceBlock) {
+                        AICompanionMod.LOGGER.info("[AutoUpgrade] Using existing furnace at {}", p);
                         return p.immutable();
                     }
                 }
             }
         }
 
-        // 2. 没有已存在的熔炉→检查背包里有没有
-        int furnaceSlot = -1;
-        for (int i = 0; i < entity.getInventorySize(); i++) {
-            if (entity.getItem(i).getItem() == Items.FURNACE) { furnaceSlot = i; break; }
-        }
-        if (furnaceSlot < 0) {
-            AICompanionMod.LOGGER.info("[AutoUpgrade] No furnace available in inventory or nearby");
-            return null;
+        // 2. 背包里有熔炉→放到合适位置
+        if (countItem(entity, Items.FURNACE) >= 1) {
+            BlockPos placePos = findSolidGround(entity, origin);
+            if (placePos != null) {
+                level.setBlock(placePos, Blocks.FURNACE.defaultBlockState(), 3);
+                entity.animateBlockPlace(placePos);
+                consumeOneItem(entity, Items.FURNACE);
+                AICompanionMod.LOGGER.info("[AutoUpgrade] Placed furnace at {}", placePos);
+                entity.showDialogue("§8🔥 放置熔炉", 30);
+                return placePos;
+            }
         }
 
-        // 3. 找合适的放置位置（实体地面，非农田/作物）
+        // 3. 没有熔炉→检查是否有工作台+圆石来合成（遵循原版规则）
+        if (hasCraftingTable(entity) && countItem(entity, Items.COBBLESTONE) >= 8) {
+            consumeItems(entity, Items.COBBLESTONE, 8);
+            entity.addItemToInventory(new ItemStack(Items.FURNACE));
+            entity.animateSwing();
+            AICompanionMod.LOGGER.info("[AutoUpgrade] Crafted furnace using crafting table (8 cobblestone)");
+            entity.showDialogue("§8🔧 合成熔炉", 30);
+            // 递归调用自己→现在背包有熔炉了
+            return findOrPlaceFurnace(entity);
+        }
+
+        AICompanionMod.LOGGER.info("[AutoUpgrade] No furnace: need crafting table + 8 cobblestone");
+        return null;
+    }
+
+    /** 检查背包或附近是否有工作台 */
+    private static boolean hasCraftingTable(AutomatonEntity entity) {
+        // 检查背包
+        if (countItem(entity, Items.CRAFTING_TABLE) >= 1) return true;
+        // 检查附近方块
+        net.minecraft.world.level.Level level = entity.level();
+        BlockPos origin = entity.blockPosition();
+        for (int dx = -8; dx <= 8; dx++)
+            for (int dy = -2; dy <= 2; dy++)
+                for (int dz = -8; dz <= 8; dz++)
+                    if (level.getBlockState(origin.offset(dx, dy, dz)).getBlock() == Blocks.CRAFTING_TABLE)
+                        return true;
+        return false;
+    }
+
+    /** 找合适的放置位置（实体地面，非农田/作物） */
+    private static BlockPos findSolidGround(AutomatonEntity entity, BlockPos origin) {
+        net.minecraft.world.level.Level level = entity.level();
         BlockPos place = origin;
-        while (level.getBlockState(place).isAir() && place.getY() > level.getMinBuildHeight() + 1) {
+        while (level.getBlockState(place).isAir() && place.getY() > level.getMinBuildHeight() + 1)
             place = place.below();
+        BlockPos above = place.above();
+        if (!level.getBlockState(above).isAir()) {
+            above = origin.east().above();
+            if (!level.getBlockState(above).isAir()) return null;
         }
-        BlockPos furnacePos = place.above();
-        if (!level.getBlockState(furnacePos).isAir()) {
-            // 脚下被占→往旁边挪一格
-            furnacePos = origin.east().above();
-            if (!level.getBlockState(furnacePos).isAir()) return null;
-        }
-        // 不能放在农田上
-        if (level.getBlockState(place).getBlock() instanceof net.minecraft.world.level.block.FarmBlock) {
-            AICompanionMod.LOGGER.info("[AutoUpgrade] Refusing to place furnace on farmland");
-            return null;
-        }
+        if (level.getBlockState(place).getBlock() instanceof net.minecraft.world.level.block.FarmBlock) return null;
+        return above;
+    }
 
-        level.setBlock(furnacePos, Blocks.FURNACE.defaultBlockState(), 3);
-        entity.animateBlockPlace(furnacePos);
-        entity.getItem(furnaceSlot).shrink(1);
-        if (entity.getItem(furnaceSlot).isEmpty())
-            entity.setItem(furnaceSlot, ItemStack.EMPTY);
-
-        AICompanionMod.LOGGER.info("[AutoUpgrade] Placed furnace at {}", furnacePos);
-        entity.showDialogue("§8🔥 放置熔炉", 30);
-        return furnacePos;
+    /** 消耗单个物品 */
+    private static void consumeOneItem(AutomatonEntity entity, Item item) {
+        for (int i = 0; i < entity.getInventorySize(); i++) {
+            ItemStack s = entity.getItem(i);
+            if (s.getItem() == item) {
+                s.shrink(1);
+                if (s.isEmpty()) entity.setItem(i, ItemStack.EMPTY);
+                return;
+            }
+        }
     }
 
     private static void consumeItems(AutomatonEntity entity, Item item, int count) {

@@ -148,6 +148,7 @@ public class CompanionSurvivalGoal extends Goal {
         // 放置火把
         if (level.getBlockState(place).isAir()) {
             level.setBlock(place, Blocks.TORCH.defaultBlockState(), 3);
+            companion.animateBlockPlace(place);
             torch.shrink(1);
             if (torch.isEmpty()) {
                 // 从背包中移除空堆叠

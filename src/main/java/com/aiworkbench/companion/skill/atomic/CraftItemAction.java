@@ -163,6 +163,7 @@ public class CraftItemAction implements AtomicAction {
             if (!entity.addItemToInventory(result)) {
                 entity.spawnAtLocation(result);
             }
+            entity.animateSwing();
         }
 
         return true;

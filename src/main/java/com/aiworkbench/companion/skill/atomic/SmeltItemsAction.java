@@ -119,6 +119,7 @@ public class SmeltItemsAction implements AtomicAction {
             }
             case LOAD -> {
                 if (loadFurnace(entity)) {
+                    entity.animateSwing();
                     phase = Phase.WAIT;
                     waitTicks = 0;
                     AICompanionMod.LOGGER.info("[Smelt] Furnace loaded, waiting for smelting");
@@ -164,6 +165,7 @@ public class SmeltItemsAction implements AtomicAction {
             }
             case COLLECT -> {
                 if (collectOutput(entity)) {
+                    entity.animateSwing();
                     remainingCount--;
                     if (remainingCount <= 0) {
                         phase = Phase.DONE;

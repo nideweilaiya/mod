@@ -208,6 +208,10 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     private static final long EVENT_DIALOGUE_COOLDOWN_TICKS = 200; // 10 seconds
     private boolean wasDaytime = true; // Track day→night transition
 
+    // Navigation timeout (prevent infinite stuck)
+    private BlockPos lastNavCheckPos = BlockPos.ZERO;
+    private int navStuckTicks = 0;
+
     // ==================== Skill Engine ====================
     private final SkillEngine skillEngine = new SkillEngine();
     private volatile boolean skillActive = false;
@@ -379,6 +383,26 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         }
     }
 
+    /**
+     * Swing arm with proper client broadcast.
+     * Use this instead of raw swing() for non-attack actions
+     * (mining, building, item use, etc.) to ensure animation visibility.
+     */
+    public void animateSwing() {
+        this.swing(net.minecraft.world.InteractionHand.MAIN_HAND);
+        this.level().broadcastEntityEvent(this, (byte) 4);
+    }
+
+    /**
+     * Place a block with swing + break/place particles.
+     * Call AFTER level.setBlock(), passing the placed position.
+     */
+    public void animateBlockPlace(net.minecraft.core.BlockPos pos) {
+        animateSwing();
+        var state = this.level().getBlockState(pos);
+        this.level().levelEvent(2001, pos, net.minecraft.world.level.block.Block.getId(state));
+    }
+
     // ==================== Entity Data ====================
 
     @Override
@@ -474,6 +498,28 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     public boolean hurt(net.minecraft.world.damagesource.DamageSource source, float amount) {
         this.lastHurtTime = this.tickCount;
         return super.hurt(source, amount);
+    }
+
+    // ==================== Animation Pipeline ====================
+
+    /**
+     * Drive the swing animation timer every tick.
+     * PathfinderMob does NOT call updateSwingTime() — without this,
+     * swing() calls have no visible effect on clients.
+     */
+    @Override
+    public void aiStep() {
+        this.updateSwingTime();
+        super.aiStep();
+    }
+
+    @Override
+    public void handleEntityEvent(byte id) {
+        if (id == 4) {
+            this.swingTime = 6; // standard swing duration
+        } else {
+            super.handleEntityEvent(id);
+        }
     }
 
     // ==================== Death & Respawn ====================
@@ -704,6 +750,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         // Auto-recall check every second
         if (tickCount % 20 == 0) {
             checkAutoRecall();
+            checkNavigationTimeout();
         }
 
         if (tickCount % 100 == 0) {
@@ -928,6 +975,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
 
         if (picked > 0) {
             AICompanionMod.LOGGER.info("[AutomatonEntity] Picked up " + picked + " item stacks");
+            animateSwing();
             playPickupParticles();
             autoEquip();
         }
@@ -1035,6 +1083,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
                 ItemStack newArmor = this.inventory.get(bestIdx).copy();
                 this.inventory.set(bestIdx, current.copy());
                 setItemSlot(slot, newArmor);
+                animateSwing();
             }
         }
     }
@@ -1729,6 +1778,8 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             showDialogue("切换到跟随模式", 60);
             AICompanionMod.LOGGER.info("[AutomatonEntity] V key: Switched to follow mode");
         }
+        playModeSwitchSound();
+        animateSwing();
         return followModeActive;
     }
 
@@ -2612,6 +2663,28 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         // Update CompanionManager registration
         if (AICompanionMod.companionManager != null) {
             AICompanionMod.companionManager.addCompanion(ownerUUID, this);
+        }
+    }
+
+    /**
+     * Force-stop navigation if stuck in place for 5+ seconds.
+     * Vanilla navigation has a bug: timeout=0 is ignored when speed=0,
+     * causing entities to get stuck forever against walls.
+     */
+    private void checkNavigationTimeout() {
+        if (this.navigation.isDone()) {
+            navStuckTicks = 0;
+            return;
+        }
+        if (this.blockPosition().distSqr(lastNavCheckPos) < 2.0) {
+            if (++navStuckTicks > 100) {
+                this.navigation.stop();
+                navStuckTicks = 0;
+                AICompanionMod.LOGGER.debug("[AutomatonEntity] Navigation timed out — force stopped");
+            }
+        } else {
+            navStuckTicks = 0;
+            lastNavCheckPos = this.blockPosition();
         }
     }
 

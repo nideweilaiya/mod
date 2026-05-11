@@ -238,6 +238,7 @@ public final class AutoUpgrader {
 
         if (furnaceSlot >= 0) {
             level.setBlock(furnacePos, Blocks.FURNACE.defaultBlockState(), 3);
+            entity.animateBlockPlace(furnacePos);
             entity.getItem(furnaceSlot).shrink(1);
             if (entity.getItem(furnaceSlot).isEmpty())
                 entity.setItem(furnaceSlot, ItemStack.EMPTY);
@@ -246,6 +247,7 @@ public final class AutoUpgrader {
             if (countItem(entity, Items.COBBLESTONE) >= 8) {
                 consumeItems(entity, Items.COBBLESTONE, 8);
                 level.setBlock(furnacePos, Blocks.FURNACE.defaultBlockState(), 3);
+                entity.animateBlockPlace(furnacePos);
                 entity.addItemToInventory(new ItemStack(Items.FURNACE));
             } else return null;
         }

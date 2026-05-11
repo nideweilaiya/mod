@@ -194,7 +194,7 @@ public class CompanionGuardGoal extends Goal {
         } else {
             bowUseTicks++;
             // 蓄力时举弓动画
-            if (bowUseTicks % 4 == 0) companion.swing(InteractionHand.MAIN_HAND);
+            if (bowUseTicks % 4 == 0) companion.animateSwing();
         }
     }
 
@@ -212,6 +212,7 @@ public class CompanionGuardGoal extends Goal {
         arrow.shoot(aim.x, aim.y, aim.z, 1.6f, 1.0f);
         arrow.setCritArrow(bowUseTicks >= BOW_CHARGE_TIME);
         companion.level().addFreshEntity(arrow);
+        companion.animateSwing(); // 放箭瞬间挥臂
 
         // 消耗箭
         consumeArrow();

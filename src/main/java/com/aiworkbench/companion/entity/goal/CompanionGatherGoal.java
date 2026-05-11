@@ -50,7 +50,7 @@ public class CompanionGatherGoal extends Goal {
     // 卡住
     private BlockPos lastPos;
     private int stuckTicks;
-    private static final int STUCK_MAX = 60;
+    private static final int STUCK_MAX = 30;
     private static final double STUCK_SQ = 2.25;
 
     // 黑名单
@@ -247,8 +247,10 @@ public class CompanionGatherGoal extends Goal {
             progress += ts / (hardness * 30f); // 原版玩家公式
             isBreaking = true;
 
-            // 挥动手臂（每tick，不是每6tick）
-            companion.swing(net.minecraft.world.InteractionHand.MAIN_HAND);
+            // 挥动手臂（每4tick，和裂纹动画同频，匹配原版玩家频率）
+            if (mineTicks % 4 == 0) {
+                companion.animateSwing();
+            }
 
             // 方块破裂动画（裂纹特效，和玩家挖掘时一样）
             if (companion.level() instanceof ServerLevel sl && mineTicks % 4 == 0) {
@@ -373,6 +375,7 @@ public class CompanionGatherGoal extends Goal {
         // 放置方块
         Block block = blockItem.getBlock();
         level.setBlock(placePos, block.defaultBlockState(), 3);
+        companion.animateBlockPlace(placePos);
 
         // 消耗方块
         buildBlock.shrink(1);

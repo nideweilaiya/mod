@@ -158,9 +158,9 @@ public class CompanionGatherGoal extends Goal {
         if (blacklistTicks > 0) blacklistTicks--;
         else if (!blacklist.isEmpty()) { blacklist.clear(); }
 
-        // 卡住检测
+        // 卡住检测（正在挖掘时不算卡住）
         BlockPos now = companion.blockPosition();
-        if (lastPos != null && now.distSqr(lastPos) < STUCK_SQ) stuckTicks++;
+        if (!isBreaking && lastPos != null && now.distSqr(lastPos) < STUCK_SQ) stuckTicks++;
         else { stuckTicks = 0; lastPos = now; }
         // 卡住→尝试搭路，除非达到总上限
         if (stuckTicks > STUCK_MAX && target != null) {
@@ -407,6 +407,11 @@ public class CompanionGatherGoal extends Goal {
         // 消耗方块
         buildBlock.shrink(1);
         if (buildBlock.isEmpty()) companion.setItem(slot, ItemStack.EMPTY);
+
+        // 叠高模式 → 放完方块马上跳上去，避免原地踏步
+        if ("pillar".equals(mode) && companion.onGround()) {
+            companion.getJumpControl().jump();
+        }
 
         buildCooldown = BUILD_INTERVAL;
         totalBuilds++;

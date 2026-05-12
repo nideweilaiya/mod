@@ -100,6 +100,7 @@ public class CompanionGuardGoal extends Goal {
     @Override
     public void stop() {
         inCombat = false;
+        companion.stopUsingItem(); // 停弓动画
         String enemyName = target != null ? target.getName().getString() : "敌人";
         target = null;
         equipped = false;
@@ -160,7 +161,8 @@ public class CompanionGuardGoal extends Goal {
             // 远程模式
             bowAttack(distSq);
         } else {
-            // 近战模式
+            // 近战模式 — 如果之前在拉弓，停止
+            companion.stopUsingItem();
             meleeAttack(distSq);
         }
     }
@@ -209,14 +211,18 @@ public class CompanionGuardGoal extends Goal {
             companion.getMoveControl().strafe((float) away.x, (float) away.z);
         }
 
+        // 第一tick开始拉弓动画（原版 HumanoidModel 自动处理拉弓姿势）
+        if (bowUseTicks == 0) {
+            companion.startUsingItem(InteractionHand.MAIN_HAND);
+        }
+
         // 蓄力射箭
         if (bowUseTicks >= BOW_CHARGE_TIME) {
             performBowAttack();
+            companion.stopUsingItem();
             bowUseTicks = 0;
         } else {
             bowUseTicks++;
-            // 蓄力时举弓动画
-            if (bowUseTicks % 4 == 0) companion.animateSwing();
         }
     }
 

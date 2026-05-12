@@ -25,9 +25,10 @@ import java.util.EnumSet;
  */
 public class CompanionSurvivalGoal extends Goal {
     private final AutomatonEntity companion;
-    private static final int LIGHT_THRESHOLD = 8;
-    private static final int TORCH_RADIUS = 6;
-    private static final int CHECK_INTERVAL = 200; // 10秒检查一次
+    private static final int LIGHT_THRESHOLD = 8; // 光照<8视为暗点（原版刷怪条件：≤7）
+    private static final int TORCH_RADIUS = 8;    // 8格扫描半径
+    private static final int TORCH_SPACING = 5;   // 火把最小间隔（原版建议5-6格）
+    private static final int CHECK_INTERVAL = 100; // 5秒检查一次（原10秒太长）
     private int checkTimer;
     private BlockPos torchTarget;
 
@@ -39,7 +40,7 @@ public class CompanionSurvivalGoal extends Goal {
     @Override
     public boolean canUse() {
         if (companion.isSkillActive()) return false;
-        if (!companion.isFollowModeActive() && !companion.isGatherModeEnabled()) return false;
+        if (!companion.isFollowModeActive() && !companion.isGatherModeEnabled() && !companion.isFarmModeEnabled()) return false;
 
         int blockLight = companion.level().getBrightness(LightLayer.BLOCK, companion.blockPosition());
 
@@ -97,8 +98,8 @@ public class CompanionSurvivalGoal extends Goal {
         BlockPos darkest = null;
         int darkestLight = LIGHT_THRESHOLD;
 
-        for (int dx = -TORCH_RADIUS; dx <= TORCH_RADIUS; dx += 2) {
-            for (int dz = -TORCH_RADIUS; dz <= TORCH_RADIUS; dz += 2) {
+        for (int dx = -TORCH_RADIUS; dx <= TORCH_RADIUS; dx += TORCH_SPACING) {
+            for (int dz = -TORCH_RADIUS; dz <= TORCH_RADIUS; dz += TORCH_SPACING) {
                 BlockPos pos = origin.offset(dx, 0, dz);
                 // 找地面位置
                 BlockPos ground = findGround(pos);

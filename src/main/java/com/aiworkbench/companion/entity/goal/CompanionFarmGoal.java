@@ -53,6 +53,28 @@ public class CompanionFarmGoal extends Goal {
     private static final int ANIMAL_COOLDOWN = 100; // 5秒后再找下一只
     private static final double ANIMAL_REACH_SQ = 3.0 * 3.0;
 
+    // 锄地
+    private BlockPos hoeTarget;
+
+    private static final net.minecraft.world.item.Item[] WOOL_BY_COLOR = {
+        net.minecraft.world.item.Items.WHITE_WOOL,
+        net.minecraft.world.item.Items.ORANGE_WOOL,
+        net.minecraft.world.item.Items.MAGENTA_WOOL,
+        net.minecraft.world.item.Items.LIGHT_BLUE_WOOL,
+        net.minecraft.world.item.Items.YELLOW_WOOL,
+        net.minecraft.world.item.Items.LIME_WOOL,
+        net.minecraft.world.item.Items.PINK_WOOL,
+        net.minecraft.world.item.Items.GRAY_WOOL,
+        net.minecraft.world.item.Items.LIGHT_GRAY_WOOL,
+        net.minecraft.world.item.Items.CYAN_WOOL,
+        net.minecraft.world.item.Items.PURPLE_WOOL,
+        net.minecraft.world.item.Items.BLUE_WOOL,
+        net.minecraft.world.item.Items.BROWN_WOOL,
+        net.minecraft.world.item.Items.GREEN_WOOL,
+        net.minecraft.world.item.Items.RED_WOOL,
+        net.minecraft.world.item.Items.BLACK_WOOL
+    };
+
     public CompanionFarmGoal(AutomatonEntity companion, double speed) {
         this.companion = companion;
         this.speed = speed;
@@ -72,7 +94,10 @@ public class CompanionFarmGoal extends Goal {
         if (target != null) return true;
         // 无作物→找动物
         animalTarget = scanAnimal();
-        return animalTarget != null;
+        if (animalTarget != null) return true;
+        // 无动物→找可耕地
+        hoeTarget = scanForFarmland();
+        return hoeTarget != null;
     }
 
     @Override
@@ -80,12 +105,13 @@ public class CompanionFarmGoal extends Goal {
         if (!companion.isFarmModeEnabled() || companion.isSkillActive()) return false;
         if (companion.isGuardModeEnabled()) return false;
         if (hostilesNearby()) {
+            companion.setPreCombatMode("farm");
             companion.setGuardModeEnabled(true);
             companion.setFarmModeEnabled(false);
             companion.showDialogue("§c敌人！切换战斗", 40);
             return false;
         }
-        return target != null || animalTarget != null || (isBreaking && scan() != null);
+        return target != null || animalTarget != null || hoeTarget != null || (isBreaking && scan() != null);
     }
 
     private boolean hostilesNearby() {
@@ -110,6 +136,7 @@ public class CompanionFarmGoal extends Goal {
             sl.destroyBlockProgress(companion.getId(), target, -1);
         isBreaking = false; target = null;
         animalTarget = null;
+        hoeTarget = null;
     }
 
     @Override
@@ -133,6 +160,29 @@ public class CompanionFarmGoal extends Goal {
         }
         if (target == null && animalTarget != null && !animalTarget.isAlive()) {
             animalTarget = null;
+        }
+
+        // === 锄地（无作物和动物目标时） ===
+        if (target == null && animalTarget == null && hoeTarget != null) {
+            Level level = companion.level();
+            BlockState hoeState = level.getBlockState(hoeTarget);
+            if (hoeState.getBlock() != Blocks.DIRT && hoeState.getBlock() != Blocks.GRASS_BLOCK) {
+                hoeTarget = null;
+            } else {
+                Vec3 hoeCenter = Vec3.atCenterOf(hoeTarget);
+                double distSq = companion.distanceToSqr(hoeCenter.x, hoeCenter.y, hoeCenter.z);
+                companion.getLookControl().setLookAt(hoeCenter.x, hoeCenter.y, hoeCenter.z);
+
+                if (distSq > REACH_SQ) {
+                    companion.getNavigation().moveTo(hoeTarget.getX(), hoeTarget.getY(), hoeTarget.getZ(), speed);
+                } else {
+                    companion.getNavigation().stop();
+                    hoeAndPlant(hoeTarget);
+                    hoeTarget = null;
+                    target = scan();
+                }
+                return;
+            }
         }
 
         if (blacklistTicks > 0) blacklistTicks--;
@@ -220,7 +270,11 @@ public class CompanionFarmGoal extends Goal {
         if (animalTarget instanceof Sheep sheep && !sheep.isSheared() && hasItem(Items.SHEARS)) {
             sheep.setSheared(true);
             int woolCount = 1 + sheep.level().random.nextInt(3);
-            companion.addItemToInventory(new ItemStack(Items.WHITE_WOOL, woolCount));
+            var dyeColor = sheep.getColor();
+            net.minecraft.world.item.Item woolItem = dyeColor != null
+                ? WOOL_BY_COLOR[dyeColor.getId()]
+                : Items.WHITE_WOOL;
+            companion.addItemToInventory(new ItemStack(woolItem, woolCount));
             companion.showDialogue("§f✂ 剪羊毛", 30);
         } else if (animalTarget instanceof Cow && hasItem(Items.BUCKET)) {
             consumeOneItem(Items.BUCKET);
@@ -230,6 +284,14 @@ public class CompanionFarmGoal extends Goal {
             ItemStack breedItem = findBreedItem(a);
             if (breedItem != null && !breedItem.isEmpty()) {
                 breedItem.shrink(1);
+                if (breedItem.isEmpty()) {
+                    for (int i = 0; i < companion.getInventorySize(); i++) {
+                        if (companion.getItem(i) == breedItem) {
+                            companion.setItem(i, net.minecraft.world.item.ItemStack.EMPTY);
+                            break;
+                        }
+                    }
+                }
                 a.setInLove(null);
                 companion.showDialogue("§d❤ 繁殖", 30);
             }
@@ -315,6 +377,11 @@ public class CompanionFarmGoal extends Goal {
         BlockPos soil = pos.below();
         BlockState soilState = level.getBlockState(soil);
         if (soilState.getBlock() instanceof FarmBlock || soilState.getBlock() instanceof SoulSandBlock) {
+            int lightLevel = level.getMaxLocalRawBrightness(pos);
+            if (lightLevel < 9) {
+                AICompanionMod.LOGGER.info("[FarmGoal] Skipping replant at {} - too dark (light={})", pos, lightLevel);
+                return;
+            }
             Item seedItem = getSeedFor(name);
             if (seedItem != null && consumeItem(seedItem) >= 0) {
                 BlockState newCrop = getCropBlock(name);
@@ -326,6 +393,110 @@ public class CompanionFarmGoal extends Goal {
         }
 
         AICompanionMod.LOGGER.info("[FarmGoal] Harvested {} ({}crops/{}items)", name, broken, collected);
+    }
+
+    // ===== 锄地 =====
+
+    private BlockPos scanForFarmland() {
+        BlockPos origin = companion.blockPosition();
+        Level level = companion.level();
+
+        for (int dx = -SCAN; dx <= SCAN; dx++) {
+            for (int dy = -2; dy <= 2; dy++) {
+                for (int dz = -SCAN; dz <= SCAN; dz++) {
+                    BlockPos p = origin.offset(dx, dy, dz);
+                    BlockState s = level.getBlockState(p);
+                    if (s.getBlock() != Blocks.DIRT && s.getBlock() != Blocks.GRASS_BLOCK) continue;
+                    if (blacklist.contains(p)) continue;
+                    int light = level.getMaxLocalRawBrightness(p.above());
+                    if (light < 9) continue;
+                    if (!isNearWater(level, p)) continue;
+                    if (!hasHoe() || !hasAnySeed()) continue;
+                    if (!level.getBlockState(p.above()).isAir()) continue;
+                    return p.immutable();
+                }
+            }
+        }
+        return null;
+    }
+
+    private boolean isNearWater(Level level, BlockPos pos) {
+        for (int dx = -4; dx <= 4; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dz = -4; dz <= 4; dz++) {
+                    if (level.getBlockState(pos.offset(dx, dy, dz)).getBlock() == Blocks.WATER) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean hasHoe() {
+        for (int i = 0; i < companion.getInventorySize(); i++) {
+            if (companion.getItem(i).getItem() instanceof net.minecraft.world.item.HoeItem) return true;
+        }
+        return false;
+    }
+
+    private boolean hasAnySeed() {
+        for (int i = 0; i < companion.getInventorySize(); i++) {
+            net.minecraft.world.item.Item item = companion.getItem(i).getItem();
+            if (item == Items.WHEAT_SEEDS || item == Items.CARROT || item == Items.POTATO
+                || item == Items.BEETROOT_SEEDS || item == Items.NETHER_WART) return true;
+        }
+        return false;
+    }
+
+    private Item findFirstSeed() {
+        for (int i = 0; i < companion.getInventorySize(); i++) {
+            Item item = companion.getItem(i).getItem();
+            if (item == Items.WHEAT_SEEDS || item == Items.CARROT || item == Items.POTATO
+                || item == Items.BEETROOT_SEEDS || item == Items.NETHER_WART) return item;
+        }
+        return null;
+    }
+
+    private BlockState getCropBlockForSeed(Item seedItem) {
+        if (seedItem == Items.WHEAT_SEEDS) return Blocks.WHEAT.defaultBlockState();
+        if (seedItem == Items.CARROT) return Blocks.CARROTS.defaultBlockState();
+        if (seedItem == Items.POTATO) return Blocks.POTATOES.defaultBlockState();
+        if (seedItem == Items.BEETROOT_SEEDS) return Blocks.BEETROOTS.defaultBlockState();
+        if (seedItem == Items.NETHER_WART) return Blocks.NETHER_WART.defaultBlockState();
+        return null;
+    }
+
+    private void hoeAndPlant(BlockPos pos) {
+        Level level = companion.level();
+        BlockState state = level.getBlockState(pos);
+
+        if (state.getBlock() == Blocks.DIRT || state.getBlock() == Blocks.GRASS_BLOCK) {
+            boolean nearWater = isNearWater(level, pos);
+            level.setBlock(pos, Blocks.FARMLAND.defaultBlockState()
+                .setValue(net.minecraft.world.level.block.FarmBlock.MOISTURE, nearWater ? 7 : 0), 3);
+            companion.animateSwing();
+            companion.playSound(net.minecraft.sounds.SoundEvents.HOE_TILL, 1.0f, 1.0f);
+
+            for (int i = 0; i < companion.getInventorySize(); i++) {
+                ItemStack s = companion.getItem(i);
+                if (s.getItem() instanceof net.minecraft.world.item.HoeItem) {
+                    s.hurtAndBreak(1, companion, e -> {});
+                    break;
+                }
+            }
+
+            BlockPos above = pos.above();
+            if (level.getBlockState(above).isAir()) {
+                Item seedItem = findFirstSeed();
+                if (seedItem != null) {
+                    BlockState cropState = getCropBlockForSeed(seedItem);
+                    if (cropState != null) {
+                        level.setBlock(above, cropState, 3);
+                        consumeOneItem(seedItem);
+                        companion.showDialogue("§a🌾 锄地种植", 30);
+                    }
+                }
+            }
+        }
     }
 
     // ===== 种子/作物映射 =====

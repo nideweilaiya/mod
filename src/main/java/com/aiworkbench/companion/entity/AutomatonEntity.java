@@ -32,7 +32,6 @@ import net.minecraft.world.entity.ai.goal.RandomLookAroundGoal;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.PathfinderMob;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.enchantment.EnchantmentHelper;
 import net.minecraft.world.item.enchantment.Enchantments;
 import net.minecraft.world.level.Level;
@@ -90,7 +89,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     private static final EntityDataAccessor<String> DATA_ACTION_TEXT =
         SynchedEntityData.defineId(AutomatonEntity.class, EntityDataSerializers.STRING);
     private int strengthPoints = 0;   // 攻击力
-    private int vitalityPoints = 0;   // 生命值
+    private int vitalityPoints = 0;   // 生命力
     private int speedPoints = 0;      // 移动速度
     private int defensePoints = 0;    // 护甲
     private static final int POINTS_PER_LEVEL = 3;
@@ -130,7 +129,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     // ==================== Farm Mode (作物种植) ====================
     private boolean farmModeEnabled = false;
 
-    // ==================== 感知缓存（避免重复O(n³)扫描） ====================
+    // ==================== 感知缓存（避免重复O(n³)扫描）====================
     private PerceptionEngine.PerceptionData cachedPerception;
     private long lastPerceptionTick;
 
@@ -149,8 +148,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     private int dialogueEndTick = 0;
     private static final int DEFAULT_DIALOGUE_DURATION_TICKS = 100; // ~5 seconds
     private long lastSituationWarningTick = 0;
-    private String lastDangerType = null; // 同类型危险10秒内不重复提醒
-
+    private String lastDangerType = null; // 同类型危险30秒内不重复提醒
     // ==================== Active Decision State Machine ====================
     private String currentQuestion = null;      // Current active question (null = no question)
     private int questionEndTick = 0;            // Tick when question should disappear
@@ -169,6 +167,9 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     // ==================== Follow Mode Toggle (F Key) ====================
     // true = follow mode (companion follows owner), false = task mode (guard/mine/chop active)
     private boolean followModeActive = true;
+
+    // Remember the mode before combat interruption so we can restore it after
+    private String preCombatMode = "follow"; // "follow", "gather", "farm"
 
     // ==================== Visibility (Hide Command) ====================
     private boolean hidden = false;
@@ -192,9 +193,13 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     private double pickupRadius = 5.0;
     private boolean pickupOnlyValuable = false;
 
+    // ==================== Chat Message Toggle ====================
+    private boolean chatMsgEnabled = true;
+
     // ==================== Manual Equip Cooldown ====================
     private long lastManualEquipTick = 0; // 玩家手动装备的时间戳，防止autoEquip立即覆盖
     private boolean suppressAutoEquip = false; // 背包打开期间暂停自动装备
+    private long autoUpgradeLastCheckTick = 0;
 
     // ==================== Inventory ====================
     private static final int INVENTORY_SIZE = 27;  // 3 rows x 9 columns
@@ -203,6 +208,15 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     // ==================== Health & Regen ====================
     private int lastHurtTime = -200; // Tick when last damaged (negative = full health at start)
     private boolean respawnPending = false; // Prevent double-respawn scheduling
+
+    // ==================== Hunger System ====================
+    private static final int MAX_HUNGER = 20;
+    private static final float MAX_SATURATION = 20.0f;
+    private int hungerLevel = MAX_HUNGER;
+    private float saturationLevel = 5.0f;
+    private float exhaustionLevel = 0.0f;
+    private int hungerTickCounter = 0;
+    private int eatingTicks = 0; // 进食冷却，模拟玩家1.6秒进食时间
 
     // ==================== AI Spontaneous Dialogue ====================
     private int aiSpontaneousCooldown = 0; // ticks until next AI idle speech
@@ -228,7 +242,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     private boolean autonomousMode = false;          // 自主模式：true=同伴自己决定做什么
     private int curriculumTickCounter = 0;            // 课程评估计数器
     private static final int CURRICULUM_EVAL_INTERVAL = 600; // 每30秒评估一次（600 ticks）
-    private CurriculumProposal pendingProposal = null; // 待确认的课程提议
+    private CurriculumProposal pendingProposal = null; // 当前待处理的课程提议
 
     // ==================== Valuable Items (Pickup Filter) ====================
 
@@ -510,7 +524,31 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     @Override
     public boolean hurt(net.minecraft.world.damagesource.DamageSource source, float amount) {
         this.lastHurtTime = this.tickCount;
+        // 被生物攻击时自动切换到守护模式并反击（记住被打前的模式）
+        if (!this.level().isClientSide && source.getEntity() instanceof net.minecraft.world.entity.LivingEntity attacker
+            && attacker != getOwner() && !(attacker instanceof AutomatonEntity)) {
+            if (!guardModeEnabled) {
+                if (gatherModeEnabled) setPreCombatMode("gather");
+                else if (farmModeEnabled) setPreCombatMode("farm");
+                guardModeEnabled = true;
+                gatherModeEnabled = false;
+                farmModeEnabled = false;
+                AICompanionMod.LOGGER.info("[AutomatonEntity] Hit by {} - auto-switching to guard mode", attacker.getName().getString());
+            }
+        }
         return super.hurt(source, amount);
+    }
+
+    @Override
+    protected int calculateFallDamage(float fallDistance, float damageMultiplier) {
+        if (this.hasEffect(net.minecraft.world.effect.MobEffects.SLOW_FALLING)) return 0;
+        float adjusted = fallDistance;
+        var jumpBoost = this.getEffect(net.minecraft.world.effect.MobEffects.JUMP);
+        if (jumpBoost != null) {
+            adjusted -= (jumpBoost.getAmplifier() + 1);
+        }
+        int damage = net.minecraft.util.Mth.floor((adjusted - 3.0F) * damageMultiplier);
+        return Math.max(0, damage);
     }
 
     // ==================== Animation Pipeline ====================
@@ -540,15 +578,14 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
 
     @Override
     public void die(net.minecraft.world.damagesource.DamageSource source) {
-        // Death sound (broadcast to nearby players)
         if (!this.level().isClientSide) {
             this.playSound(net.minecraft.sounds.SoundEvents.PLAYER_DEATH, 1.0f, 0.8f);
         }
-        // Schedule respawn (server-side only) — inventory preserved
         if (!this.level().isClientSide && !respawnPending) {
             respawnPending = true;
 
-            // Save death data before entity is removed
+            dropInventoryItems();
+
             String deathCharId = characterId;
             int deathLevel = level;
             int deathXp = xp;
@@ -557,29 +594,28 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             int deathStr = strengthPoints, deathVit = vitalityPoints;
             int deathSpd = speedPoints, deathDef = defensePoints;
             int deathAvail = this.entityData.get(DATA_AVAILABLE_POINTS);
+            int deathHunger = hungerLevel;
+            float deathSaturation = saturationLevel;
 
-            // Find owner player before removing from manager
             String customName = this.getCustomName() != null ? this.getCustomName().getString() : "Companion";
             ServerPlayer owner = getOwner();
 
-            // Shutdown AI brain to prevent memory leak
             if (AICompanionMod.aiManager != null) {
                 AICompanionMod.aiManager.removeAI(this.getUUID());
             }
 
-            // Remove from manager so player can't interact with dead companion
             if (AICompanionMod.companionManager != null && ownerUUID != null) {
                 AICompanionMod.companionManager.removeCompanion(ownerUUID);
             }
 
-            // Notify owner
             if (owner != null) {
                 owner.sendSystemMessage(net.minecraft.network.chat.Component.literal(
-                    "§c" + customName + " died! Respawning in 30 seconds..."));
+                    "\u00a7c" + customName + " died! Respawning in 30 seconds..."));
             }
 
             scheduleRespawn(deathCharId, deathLevel, deathXp, deathSkinType, deathSkinValue,
-                deathStr, deathVit, deathSpd, deathDef, deathAvail);
+                deathStr, deathVit, deathSpd, deathDef, deathAvail,
+                deathHunger, deathSaturation);
         }
         super.die(source);
     }
@@ -601,7 +637,8 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
      * Schedule a respawn task 30 seconds (600 ticks) later, preserving level/XP/skin.
      */
     private void scheduleRespawn(String charId, int savedLevel, int savedXp, int savedSkinType,
-            String savedSkinValue, int savedStr, int savedVit, int savedSpd, int savedDef, int savedAvail) {
+            String savedSkinValue, int savedStr, int savedVit, int savedSpd, int savedDef, int savedAvail,
+            int savedHunger, float savedSaturation) {
         if (this.level().isClientSide || ownerUUID == null) return;
 
         UUID ownerUuid = ownerUUID;
@@ -661,7 +698,10 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
                 newCompanion.entityData.set(DATA_DEFENSE_POINTS, savedDef);
                 newCompanion.applyStatAllocation();
 
-                newCompanion.showDialogue("§a我回来了！", 80);
+                newCompanion.hungerLevel = savedHunger;
+                newCompanion.saturationLevel = savedSaturation;
+
+                newCompanion.showDialogue("\u00a7a我回来了！", 80);
                 newCompanion.playSpawnParticles();
 
                 // Re-register with manager
@@ -680,7 +720,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
                 nbt.remove("aicompanion.companion_uuid_mostMost");
                 nbt.remove("aicompanion.companion_uuid_mostLeast");
 
-                player.sendSystemMessage(net.minecraft.network.chat.Component.literal("§a你的同伴已复活！等级: " + savedLevel));
+                player.sendSystemMessage(net.minecraft.network.chat.Component.literal("\u00a7a你的同伴已复活！等级: " + savedLevel));
             }
         ));
     }
@@ -727,15 +767,12 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         // Patrol behavior - wander around patrol center
         tickPatrol();
 
-        // Passive health regen (server-side only) - 1 HP/sec after 5 seconds without damage
+        // Eating cooldown countdown (every tick)
+        if (eatingTicks > 0) eatingTicks--;
+
+        // Hunger system tick (server-side only)
         if (!this.level().isClientSide && tickCount % 20 == 0) {
-            if (tickCount - lastHurtTime > 100 && this.getHealth() < this.getMaxHealth()) {
-                this.heal(1.0f);
-            }
-            // Auto-eat: consume food when health < 75%
-            if (this.getHealth() < this.getMaxHealth() * 0.75f) {
-                tryAutoEat();
-            }
+            tickHunger();
             // Auto-smelt: check if we can smelt ores (every 10s)
             if (tickCount % 200 == 0) {
                 AutoUpgrader.trySmeltIfNeeded(this);
@@ -804,11 +841,6 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             autoEquip();
         }
 
-        // 更新药水Buff效果
-        if (tickCount % 20 == 0) {
-            applyBuffEffects();
-        }
-
         // Memory summarizer tick every 1200 ticks (60 seconds)
         if (tickCount % 1200 == 0 && AICompanionMod.memoryManager != null) {
             AICompanionMod.memoryManager.tick();
@@ -820,7 +852,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             // Nightfall detection for LLM contextual dialogue
             boolean isDayNow = this.level().isDay();
             if (wasDaytime && !isDayNow) {
-                addRecentEvent("nightfall", "夜幕降临了");
+                addRecentEvent("nightfall", "夜幕降临！");
                 triggerEventDialogue("nightfall", null);
             }
             wasDaytime = isDayNow;
@@ -836,7 +868,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             pushAiContext();
         }
 
-        // Dialogue auto-hide → show persistent status
+        // Dialogue auto-hide — show persistent status
         if (!dialogueText.isEmpty() && tickCount > dialogueEndTick) {
             dialogueText = "";
             updatePersistentName();
@@ -862,9 +894,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     }
 
     /**
-     * LLM 采集战略层：异步发送感知数据给 Ollama，获取优先采集目标。
-     * 在采集模式下每30秒运行一次，不阻塞游戏主线程。
-     */
+     * LLM 采集战略层：异步发送感知数据给 Ollama，获取优先采集目标。     * 在采集模式下每30秒运行一次，不阻塞游戏主线程。     */
     private void evaluateGatherStrategyAsync() {
         ServerPlayer owner = getOwner();
         if (owner == null) return;
@@ -929,7 +959,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
                         if (getServer() != null) {
                             getServer().execute(() -> {
                                 setGatherPriority(joined);
-                                showDialogue("§bLLM: " + joined, 60);
+                                showDialogue("\u00a7bLLM: " + joined, 60);
                                 AICompanionMod.LOGGER.info("[LLMStrategy] {}", joined);
                             });
                         }
@@ -1023,12 +1053,12 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
      */
     /**
      * 模式感知自动装备：根据当前模式优先装备合适的工具和防具。
-     * - 挖掘模式 → 最好的镐子
-     * - 砍伐模式 → 最好的斧头
-     * - 守护模式 → 最好的剑 + 全身护甲
-     * - 跟随模式 → 卸下主手装备（外观）
+     * - 挖掘模式 — 最好的镮子
+     * - 砍伐模式 — 最好的斧头
+     * - 守护模式 — 最好的剑 + 全身护甲+ 全身护甲
+     * - 跟随模式 — 卸下主手装备（外观）
      */
-    /** 通知实体：玩家手动操作了装备槽，autoEquip短时间内不覆盖 */
+    /** 通知实体：玩家手动操作了装备槽，autoEquip短时间内不覆盖*/
     public void notifyManualEquip() {
         this.lastManualEquipTick = this.level().getGameTime();
     }
@@ -1043,8 +1073,11 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         }
     }
 
+    public long getAutoUpgradeLastCheckTick() { return autoUpgradeLastCheckTick; }
+    public void setAutoUpgradeLastCheckTick(long tick) { this.autoUpgradeLastCheckTick = tick; }
+
     /** Auto-craft needed tools from available materials */
-    private void tryAcquireTool() {
+    public void tryAcquireTool() {
         if (!isAlive() || this.level().isClientSide) return;
         ItemStack mainhand = getItemBySlot(EquipmentSlot.MAINHAND);
         boolean needsTool = false;
@@ -1052,11 +1085,35 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             if (!(mainhand.getItem() instanceof net.minecraft.world.item.PickaxeItem)
                 && !(mainhand.getItem() instanceof net.minecraft.world.item.AxeItem))
                 needsTool = true;
+            else if (isToolLowDurability(mainhand))
+                needsTool = true;
+        }
+        if (guardModeEnabled) {
+            if (!(mainhand.getItem() instanceof net.minecraft.world.item.SwordItem)
+                && !(mainhand.getItem() instanceof net.minecraft.world.item.AxeItem))
+                needsTool = true;
+            else if (isToolLowDurability(mainhand))
+                needsTool = true;
         }
         if (!needsTool) return;
+        if (gatherModeEnabled && isToolLowDurability(mainhand)) {
+            Class<?> toolClass = mainhand.getItem() instanceof net.minecraft.world.item.PickaxeItem
+                ? net.minecraft.world.item.PickaxeItem.class
+                : net.minecraft.world.item.AxeItem.class;
+            if (trySwapToBetterTool(toolClass)) return;
+        }
+        if (guardModeEnabled && isToolLowDurability(mainhand)) {
+            Class<?> toolClass = mainhand.getItem() instanceof net.minecraft.world.item.SwordItem
+                ? net.minecraft.world.item.SwordItem.class
+                : net.minecraft.world.item.AxeItem.class;
+            if (trySwapToBetterTool(toolClass)) return;
+        }
         for (int i = 0; i < INVENTORY_SIZE; i++) {
             net.minecraft.world.item.Item it = this.inventory.get(i).getItem();
-            if (it instanceof net.minecraft.world.item.PickaxeItem || it instanceof net.minecraft.world.item.AxeItem) {
+            if ((it instanceof net.minecraft.world.item.PickaxeItem
+                || it instanceof net.minecraft.world.item.AxeItem
+                || it instanceof net.minecraft.world.item.SwordItem)
+                && !isToolLowDurability(this.inventory.get(i))) {
                 ItemStack tool = this.inventory.get(i).copy();
                 this.inventory.set(i, mainhand.copy());
                 setItemSlot(EquipmentSlot.MAINHAND, tool);
@@ -1066,11 +1123,41 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         }
         if (tryCraftPickaxe(Items.WOODEN_PICKAXE, "木镐") || tryCraftPickaxe(Items.STONE_PICKAXE, "石镐")) return;
         int logs = countLogs(), planks = countPlanksItems(), sticks = countItems("stick");
-        if (logs == 0 && planks < 3) notifyOwner("§e缺原木来合成木镐");
-        else if (sticks < 2) notifyOwner("§e缺木棍（需" + (2-sticks) + "根）");
-        else notifyOwner("§e缺木板（需" + (3-planks) + "块）");
+        if (logs == 0 && planks < 3) notifyOwner("\u00a7e缺原木来合成木镐");
+        else if (sticks < 2) notifyOwner("\u00a7e缺木棍（需" + (2-sticks) + "根）");
+        else notifyOwner("\u00a7e缺木板（需" + (3-planks) + "块）");
     }
 
+    public boolean isToolLowDurability(ItemStack stack) {
+        if (stack.isEmpty()) return false;
+        if (stack.getMaxDamage() <= 0) return false;
+        int remaining = stack.getMaxDamage() - stack.getDamageValue();
+        return remaining <= 5;
+    }
+
+    public boolean trySwapToBetterTool(Class<?> toolClass) {
+        ItemStack current = getItemBySlot(EquipmentSlot.MAINHAND);
+        int bestSlot = -1;
+        int bestDurability = isToolLowDurability(current) ? 0 : (current.getMaxDamage() - current.getDamageValue());
+
+        for (int i = 0; i < INVENTORY_SIZE; i++) {
+            ItemStack stack = this.inventory.get(i);
+            if (stack.isEmpty() || !toolClass.isInstance(stack.getItem())) continue;
+            int durability = stack.getMaxDamage() - stack.getDamageValue();
+            if (durability > bestDurability && !isToolLowDurability(stack)) {
+                bestDurability = durability;
+                bestSlot = i;
+            }
+        }
+        if (bestSlot >= 0) {
+            ItemStack newTool = this.inventory.get(bestSlot).copy();
+            this.inventory.set(bestSlot, current.copy());
+            setItemSlot(EquipmentSlot.MAINHAND, newTool);
+            animateSwing();
+            return true;
+        }
+        return false;
+    }
     private boolean tryCraftPickaxe(net.minecraft.world.item.Item target, String name) {
         int planks = countPlanksItems(), sticks = countItems("stick");
         boolean hasCT = countItem(Items.CRAFTING_TABLE) > 0;
@@ -1090,14 +1177,14 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             if (planks < 3 || sticks < 2) return false;
             consumePlanksItems(3); consumeStickCount(2);
             addItemToInventory(new ItemStack(Items.WOODEN_PICKAXE));
-            notifyOwner("§a合成了" + name + "！"); animateSwing();
+            notifyOwner("\u00a7a合成了" + name + "！"); animateSwing();
             return true;
         }
         if (target == Items.STONE_PICKAXE) {
             if (!hasCT || countItem(Items.COBBLESTONE) < 3 || sticks < 2) return false;
             consumeFromInventory(Items.COBBLESTONE, 3); consumeStickCount(2);
             addItemToInventory(new ItemStack(Items.STONE_PICKAXE));
-            notifyOwner("§a合成了" + name + "！"); animateSwing();
+            notifyOwner("\u00a7a合成了" + name + "！"); animateSwing();
             return true;
         }
         return false;
@@ -1126,11 +1213,11 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
                     hasTool = true; break;
                 }
             }
-            if (!hasTool) notifyOwner("§e我需要镐子或斧头才能采集资源");
+            if (!hasTool) notifyOwner("\u00a7e我需要镐子或斧头才能采集资源");
         }
         if (guardModeEnabled) {
             if (getItemBySlot(EquipmentSlot.MAINHAND).isEmpty())
-                notifyOwner("§e我没有武器，战斗能力有限");
+                notifyOwner("\u00a7e我没有武器，战斗能力有限");
         }
     }
 
@@ -1138,35 +1225,97 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     private void updateSprintState() {
         var speedAttr = this.getAttribute(Attributes.MOVEMENT_SPEED);
         if (speedAttr == null) return;
+        if (hungerLevel <= 6) { this.setSprinting(false); return; } // 饥饿≤6不能疾跑（原版规则）
         double baseSpeed = 0.1 + speedPoints * 0.01;
         ServerPlayer owner = getOwner();
         boolean shouldSprint = false;
-        if (owner != null && owner.isSprinting() && this.distanceToSqr(owner) > 16.0) {
-            shouldSprint = true; // Owner is sprinting and companion is far
+        // 追随：距离>6格疾跑追赶（原16格太远），或跟随模式下距离>4格也跑
+        if (owner != null && (owner.isSprinting() || followModeActive) && this.distanceToSqr(owner) > 16.0) {
+            shouldSprint = true;
         }
-        if (guardModeEnabled && this.getLastHurtByMob() != null) {
-            shouldSprint = true; // In combat
+        // 战斗/采集/种植模式中自动疾跑
+        if (guardModeEnabled || gatherModeEnabled || farmModeEnabled) {
+            shouldSprint = true;
         }
+        this.setSprinting(shouldSprint);
         speedAttr.setBaseValue(shouldSprint ? baseSpeed * 1.3 : baseSpeed);
     }
 
+    private void tickHunger() {
+        float exhaustion = 0.0f;
+        if (guardModeEnabled || autoDefendTarget != null) {
+            exhaustion += 0.1f;
+        } else if (gatherModeEnabled || farmModeEnabled) {
+            exhaustion += 0.05f;
+        } else if (followModeActive) {
+            exhaustion += 0.01f;
+        }
+        if (this.isSprinting()) {
+            exhaustion += 0.1f;
+        }
+
+        addExhaustion(exhaustion);
+
+        if (hungerLevel >= 18 && this.getHealth() < this.getMaxHealth() && tickCount - lastHurtTime > 100) {
+            hungerTickCounter++;
+            int regenInterval = saturationLevel > 0 ? 80 : 160;
+            if (hungerTickCounter >= regenInterval) {
+                this.heal(1.0f);
+                hungerTickCounter = 0;
+                addExhaustion(saturationLevel > 0 ? 3.0f : 0.0f);
+            }
+        } else {
+            hungerTickCounter = 0;
+        }
+
+        if (hungerLevel <= 0 && tickCount % 40 == 0 && this.getHealth() > 1.0f) {
+            this.hurt(this.level().damageSources().starve(), 1.0f);
+        }
+
+        if (hungerLevel < 18) {
+            tryAutoEat();
+        }
+
+        if (hungerLevel <= 0 && tickCount % 200 == 0) {
+            showDialogue("\u00a7c好饿...没有食物了！", 60);
+        } else if (hungerLevel < 6 && tickCount % 200 == 0) {
+            showDialogue("\u00a7c好饿...需要食物！", 60);
+        }
+    }
+
+    public void addExhaustion(float amount) {
+        exhaustionLevel += amount;
+        while (exhaustionLevel >= 4.0f) {
+            exhaustionLevel -= 4.0f;
+            if (saturationLevel > 0) {
+                saturationLevel = Math.max(0, saturationLevel - 1.0f);
+            } else {
+                hungerLevel = Math.max(0, hungerLevel - 1);
+            }
+        }
+    }
+
     private void tryAutoEat() {
+        if (eatingTicks > 0) return;
         for (int i = 0; i < INVENTORY_SIZE; i++) {
             ItemStack stack = this.inventory.get(i);
             if (stack.isEmpty()) continue;
-            if (stack.getItem().isEdible()) {
-                var props = stack.getItem().getFoodProperties();
-                if (props != null) {
-                    float healAmount = props.getNutrition();
-                    this.heal(healAmount);
-                    stack.shrink(1);
-                    if (stack.isEmpty()) this.inventory.set(i, ItemStack.EMPTY);
-                    this.level().broadcastEntityEvent(this, (byte) 9); // eating particles
-                    this.playSound(net.minecraft.sounds.SoundEvents.GENERIC_EAT, 0.8f, 1.0f);
-                    AICompanionMod.LOGGER.info("[AutomatonEntity] Auto-ate {} healed {}HP (HP: {})",
-                        stack.getItem(), healAmount, this.getHealth());
-                    return;
-                }
+            var foodProps = stack.getItem().getFoodProperties(stack, null);
+            if (foodProps != null) {
+                int nutrition = foodProps.getNutrition();
+                float saturation = foodProps.getSaturationModifier() * nutrition;
+
+                hungerLevel = Math.min(MAX_HUNGER, hungerLevel + nutrition);
+                saturationLevel = Math.min(hungerLevel, saturationLevel + saturation);
+
+                stack.shrink(1);
+                if (stack.isEmpty()) this.inventory.set(i, ItemStack.EMPTY);
+                eatingTicks = 32; // 1.6秒进食冷却，模拟玩家进食时间
+                this.level().broadcastEntityEvent(this, (byte) 9);
+                this.playSound(net.minecraft.sounds.SoundEvents.GENERIC_EAT, 0.8f, 1.0f);
+                AICompanionMod.LOGGER.info("[AutomatonEntity] Ate {} hunger={}/{} saturation={:.1f}",
+                    stack.getItem(), hungerLevel, MAX_HUNGER, saturationLevel);
+                return;
             }
         }
     }
@@ -1177,15 +1326,18 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         // 背包打开期间暂停自动装备，防止覆盖玩家的手动操作
         if (suppressAutoEquip) return;
 
-        // 玩家10秒内手动操作了装备 → 尊重玩家选择，不自动覆盖
+        // 玩家10秒内手动操作了装备，尊重玩家选择，不自动覆盖
         if (this.level().getGameTime() - lastManualEquipTick < 200) return;
 
         if (gatherModeEnabled) {
-            // 采集模式：GatherGoal内部自动切换工具，autoEquip不干预
+            // 采集模式：GatherGoal内部自动切换工具，autoEquip不干涉
             return;
         } else if (guardModeEnabled) {
             ItemStack current = getItemBySlot(EquipmentSlot.MAINHAND);
-            if (current.isEmpty() || !(current.getItem() instanceof net.minecraft.world.item.SwordItem)) {
+            // 守护模式下：弓+箭是合法远程配置，不要替换成剑
+            boolean hasBow = current.getItem() instanceof net.minecraft.world.item.BowItem && hasArrow();
+            if (!hasBow && (current.isEmpty() || !(current.getItem() instanceof net.minecraft.world.item.SwordItem
+                || current.getItem() instanceof net.minecraft.world.item.AxeItem))) {
                 equipBestTool(net.minecraft.world.item.SwordItem.class);
             }
             equipBestArmor();
@@ -1248,6 +1400,13 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
                 animateSwing();
             }
         }
+    }
+
+    private boolean hasArrow() {
+        for (int i = 0; i < INVENTORY_SIZE; i++) {
+            if (this.inventory.get(i).getItem() == net.minecraft.world.item.Items.ARROW) return true;
+        }
+        return false;
     }
 
     /**
@@ -1319,7 +1478,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
                 if (srv != null) {
                     srv.execute(() -> {
                         if (this.isAlive()) {
-                            showDialogue("§d" + response, 80);
+                            showDialogue("\u00a7d" + response, 80);
                         }
                     });
                 }
@@ -1362,7 +1521,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
                 if (srv != null) {
                     srv.execute(() -> {
                         if (this.isAlive()) {
-                            showDialogue("§d" + response, 80);
+                            showDialogue("\u00a7d" + response, 80);
                         }
                     });
                 }
@@ -1459,7 +1618,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         PerceptionEngine.PerceptionData perception = getOrGatherPerception();
         if (perception == null) return;
 
-        // ==================== 危险警告（不取消技能，同伴自行判断） ====================
+        // ==================== 危险警告（不取消技能，同伴自行判断）====================
         if (perception.dangerLava) {
             showWarning("lava", "主人，小心岩浆！");
             return;
@@ -1525,8 +1684,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
      * Show a warning message (bypasses question system, immediate display)
      */
     private void showWarning(String dangerType, String message) {
-        // 同类型危险10秒内不重复提醒
-        if (dangerType.equals(lastDangerType) && tickCount - lastSituationWarningTick < 200) return;
+        // 同类型危险30秒内不重复提醒        if (dangerType.equals(lastDangerType) && tickCount - lastSituationWarningTick < 200) return;
         lastDangerType = dangerType;
         AICompanionMod.LOGGER.info("[AutomatonEntity] Warning: " + message);
         showDialogue(message, 80);
@@ -1622,8 +1780,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     }
 
     /**
-     * 给予同伴出生基础工具：石镐(采矿)、石斧(砍树)、石剑(战斗)。
-     */
+     * 给予同伴出生基础工具：石剑(采矿)、石斧(砍树)、石剑(战斗)。     */
     private void giveStarterEquipment() {
         this.inventory.set(0, new ItemStack(net.minecraft.world.item.Items.STONE_PICKAXE));
         this.inventory.set(1, new ItemStack(net.minecraft.world.item.Items.STONE_AXE));
@@ -1687,18 +1844,6 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             this.xp = tag.contains("CompanionXP") ? tag.getInt("CompanionXP") : 0;
             this.xpToNext = 50 + level * 80;
 
-            // Apply stat bonuses
-            double baseHealth = 120.0;
-            double newMaxHealth = baseHealth + (level - 1) * 2.0;
-            var healthAttr = this.getAttribute(Attributes.MAX_HEALTH);
-            if (healthAttr != null) healthAttr.setBaseValue(newMaxHealth);
-            if (level % 5 == 0) {
-                double baseAttack = 4.0;
-                double newAttack = baseAttack + (level / 5) * 1.0;
-                var atkAttr = this.getAttribute(Attributes.ATTACK_DAMAGE);
-                if (atkAttr != null) atkAttr.setBaseValue(newAttack);
-            }
-
             this.entityData.set(DATA_LEVEL, level);
             this.entityData.set(DATA_XP, xp);
             this.entityData.set(DATA_XP_TO_NEXT, xpToNext);
@@ -1752,6 +1897,12 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         if (tag.contains("AutoPickupEnabled")) autoPickupEnabled = tag.getBoolean("AutoPickupEnabled");
         if (tag.contains("PickupRadius")) pickupRadius = tag.getDouble("PickupRadius");
         if (tag.contains("PickupOnlyValuable")) pickupOnlyValuable = tag.getBoolean("PickupOnlyValuable");
+        if (tag.contains("ChatMsgEnabled")) chatMsgEnabled = tag.getBoolean("ChatMsgEnabled");
+
+        // Load hunger system
+        if (tag.contains("HungerLevel")) hungerLevel = tag.getInt("HungerLevel");
+        if (tag.contains("SaturationLevel")) saturationLevel = tag.getFloat("SaturationLevel");
+        if (tag.contains("ExhaustionLevel")) exhaustionLevel = tag.getFloat("ExhaustionLevel");
 
         // Load patrol center
         if (tag.contains("PatrolCenter")) {
@@ -1807,6 +1958,12 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         tag.putBoolean("AutoPickupEnabled", autoPickupEnabled);
         tag.putDouble("PickupRadius", pickupRadius);
         tag.putBoolean("PickupOnlyValuable", pickupOnlyValuable);
+        tag.putBoolean("ChatMsgEnabled", chatMsgEnabled);
+
+        // Save hunger system
+        tag.putInt("HungerLevel", hungerLevel);
+        tag.putFloat("SaturationLevel", saturationLevel);
+        tag.putFloat("ExhaustionLevel", exhaustionLevel);
 
         // Save patrol center
         if (patrolCenter != null) {
@@ -1910,6 +2067,9 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     public boolean isFollowModeActive() {
         return followModeActive;
     }
+
+    public String getPreCombatMode() { return preCombatMode; }
+    public void setPreCombatMode(String mode) { this.preCombatMode = mode; }
 
     /**
      * Toggle between follow mode and task mode (F key)
@@ -2083,8 +2243,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
 
     /**
      * 从给定位置向下扫描，找到第一个安全落脚点（脚下两格都是空气或可穿过）。
-     * 最多向下扫描 10 格，找不到则返回原位置 -1。
-     */
+     * 最多向下扫描10格，找不到则返回原位-1。     */
     private double findSafeYBelow(Level level, BlockPos ownerPos) {
         for (int dy = 1; dy <= 10; dy++) {
             BlockPos footPos = ownerPos.below(dy);
@@ -2240,7 +2399,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             speed *= 1.0f + (amp + 1) * 0.2f;
         }
 
-        // 挖掘疲劳（每级×0.3）
+        // 挖掘疲劳（每级-0.3）
         if (hasEffect(net.minecraft.world.effect.MobEffects.DIG_SLOWDOWN)) {
             int amp = getEffect(net.minecraft.world.effect.MobEffects.DIG_SLOWDOWN).getAmplifier();
             speed *= (float) Math.pow(0.3, amp + 1);
@@ -2427,9 +2586,9 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
      * Get current mode status as string for display
      */
     public String getCurrentModeString() {
-        if (guardModeEnabled) return "§c守护中";
-        if (gatherModeEnabled) return "§6采集中";
-        return "§a跟随中";
+        if (guardModeEnabled) return "\u00a7c守护";
+        if (gatherModeEnabled) return "\u00a76采集";
+        return "\u00a7a跟随";
     }
 
     /**
@@ -2500,15 +2659,13 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     }
 
     /**
-     * 根据方块类型计算采矿XP奖励。
-     * 稀有矿石和深层变种给予更多XP。
-     */
+     * 根据方块类型计算采矿XP奖励。     * 稀有矿石和深层变种给予更多XP。     */
     public void grantMiningXp(net.minecraft.world.level.block.state.BlockState state) {
         String name = state.getBlock().builtInRegistryHolder().key().location().getPath();
         int xp;
         if (name.contains("diamond")) {
             xp = 25;
-            addRecentEvent("rare_resource", "发现了钻石");
+            addRecentEvent("rare_resource", "发现了钻石！");
             triggerEventDialogue("rare_resource", java.util.Map.of("resource", "钻石"));
         } else if (name.contains("emerald")) {
             xp = 25;
@@ -2516,7 +2673,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             triggerEventDialogue("rare_resource", java.util.Map.of("resource", "绿宝石"));
         } else if (name.contains("ancient_debris")) {
             xp = 50;
-            addRecentEvent("rare_resource", "发现了远古残骸");
+            addRecentEvent("rare_resource", "发现了远古残骸！");
             triggerEventDialogue("rare_resource", java.util.Map.of("resource", "远古残骸"));
         } else if (name.contains("netherite")) {
             xp = 40;
@@ -2551,7 +2708,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         playLevelUpEffect();
 
         // Notify owner
-        String msg = "§6§l✦ 升级！同伴达到 Lv." + level + "！ +" + POINTS_PER_LEVEL + "属性点";
+        String msg = "\u00a76\u00a7l✨升级！同伴达到Lv." + level + "！+" + POINTS_PER_LEVEL + "属性点";
         showDialogue(msg, 100);
         // Record event + trigger LLM contextual level-up dialogue
         addRecentEvent("level_up", "升到了Lv." + level);
@@ -2561,10 +2718,10 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         if (owner != null) {
             String name = this.getCustomName() != null ? this.getCustomName().getString() : "同伴";
             owner.sendSystemMessage(net.minecraft.network.chat.Component.literal(
-                "§6§l✦ " + name + " 升级到 Lv." + level
-                + "！获得 " + POINTS_PER_LEVEL + " 属性点"));
+                "\u00a76\u00a7l✨" + name + " 升级到Lv." + level
+                + "！获得" + POINTS_PER_LEVEL + " 属性点"));
             owner.sendSystemMessage(net.minecraft.network.chat.Component.literal(
-                "§7使用 §f/companion stats add <属性> <点数> §7分配属性点"));
+                "\u00a77使用 \u00a7f/companion stats add <属性> <点数> \u00a77分配属性点"));
         }
 
         AICompanionMod.LOGGER.info("[Level] Companion leveled up to {}! Available points: {}",
@@ -2572,9 +2729,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     }
 
     /**
-     * 应用属性点分配，重新计算所有属性基值。
-     * 在玩家分配点数后调用。
-     */
+     * 应用属性点分配，重新计算所有属性基值。     * 在玩家分配点数后调用。     */
     private void applyStatAllocation() {
         // Base stats match a fresh player
         double baseHealth = 20.0;
@@ -2605,53 +2760,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     }
 
     /**
-     * 每20 tick应用药水Buff效果到属性上。
-     * 急迫→挖掘速度  力量→攻击力  速度→移速  抗性→减伤
-     */
-    private void applyBuffEffects() {
-        var haste = this.getEffect(net.minecraft.world.effect.MobEffects.DIG_SPEED);
-        var strength = this.getEffect(net.minecraft.world.effect.MobEffects.DAMAGE_BOOST);
-        var speed = this.getEffect(net.minecraft.world.effect.MobEffects.MOVEMENT_SPEED);
-        var resistance = this.getEffect(net.minecraft.world.effect.MobEffects.DAMAGE_RESISTANCE);
-
-        // Haste: 挖掘速度加成 (用于Goal中的挖掘计算)
-        int hasteLevel = haste != null ? haste.getAmplifier() + 1 : 0;
-
-        // Strength: +3攻击力/级
-        var atkAttr = this.getAttribute(Attributes.ATTACK_DAMAGE);
-        if (atkAttr != null) {
-            double baseAtk = atkAttr.getBaseValue();
-            double strBonus = strength != null ? (strength.getAmplifier() + 1) * 3.0 : 0;
-            atkAttr.setBaseValue(baseAtk + strBonus);
-        }
-
-        // Speed: +20%移速/级
-        var spdAttr = this.getAttribute(Attributes.MOVEMENT_SPEED);
-        if (spdAttr != null) {
-            double baseSpd = spdAttr.getBaseValue();
-            double spdBonus = speed != null ? baseSpd * 0.2 * (speed.getAmplifier() + 1) : 0;
-            spdAttr.setBaseValue(baseSpd + spdBonus);
-        }
-
-        // Resistance: +2护甲/级
-        var armAttr = this.getAttribute(Attributes.ARMOR);
-        if (armAttr != null) {
-            double baseArm = armAttr.getBaseValue();
-            double resBonus = resistance != null ? (resistance.getAmplifier() + 1) * 2.0 : 0;
-            armAttr.setBaseValue(baseArm + resBonus);
-        }
-    }
-
-    /** 检查同伴是否有急迫效果，返回加成倍率 */
-    public float getHasteBonus() {
-        var haste = this.getEffect(net.minecraft.world.effect.MobEffects.DIG_SPEED);
-        if (haste == null) return 0f;
-        return (haste.getAmplifier() + 1) * 0.2f; // 每级+20%
-    }
-
-    /**
-     * 尝试分配属性点。成功返回 true，点数不足或达上限返回 false。
-     */
+     * 尝试分配属性点。成功返回true，点数不足或达上限返回false。     */
     public boolean allocateStat(String stat, int points) {
         if (points <= 0) return false;
         int available = this.entityData.get(DATA_AVAILABLE_POINTS);
@@ -2771,6 +2880,14 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     public void setPickupRadius(double radius) { this.pickupRadius = Math.max(1.0, Math.min(16.0, radius)); }
     public boolean isPickupOnlyValuable() { return pickupOnlyValuable; }
     public void setPickupOnlyValuable(boolean valuable) { this.pickupOnlyValuable = valuable; }
+    public boolean isChatMsgEnabled() { return chatMsgEnabled; }
+    public void setChatMsgEnabled(boolean enabled) { this.chatMsgEnabled = enabled; }
+
+    // ==================== Hunger System Getters/Setters ====================
+    public int getHungerLevel() { return hungerLevel; }
+    public float getSaturationLevel() { return saturationLevel; }
+    public void setHungerLevel(int level) { this.hungerLevel = Math.max(0, Math.min(MAX_HUNGER, level)); }
+    public void setSaturationLevel(float level) { this.saturationLevel = Math.max(0, Math.min(MAX_SATURATION, level)); }
 
     // ==================== Auto-Recall System ====================
 
@@ -2794,7 +2911,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             if (!recallWarningActive) {
                 recallWarningActive = true;
                 recallWarningTicks = 0;
-                showDialogue("§d主人穿越了维度！", 80);
+                showDialogue("\u00a7d主人穿越了维度！", 80);
             } else {
                 recallWarningTicks += 20;
                 if (recallWarningTicks >= RECALL_WARNING_TICKS) {
@@ -2813,7 +2930,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             if (!recallWarningActive) {
                 recallWarningActive = true;
                 recallWarningTicks = 0;
-                showDialogue("§e主人太远了！5秒后传送...", 80);
+                showDialogue("\u00a7e主人太远了！5秒后传送...", 80);
             } else {
                 recallWarningTicks += 20;
                 if (recallWarningTicks >= RECALL_WARNING_TICKS) {
@@ -2821,7 +2938,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
                     this.teleportTo(owner.getX(), owner.getY(), owner.getZ());
                     this.setDeltaMovement(0, 0, 0);
                     this.fallDistance = 0;
-                    showDialogue("§a传送完成！", 60);
+                    showDialogue("\u00a7a传送完成！", 60);
                     recallWarningActive = false;
                     recallWarningTicks = 0;
                 }
@@ -2830,7 +2947,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             if (recallWarningActive) {
                 recallWarningActive = false;
                 recallWarningTicks = 0;
-                showDialogue("§a已跟上主人", 40);
+                showDialogue("\u00a7a已跟上主人！", 40);
             }
         }
     }
@@ -2845,7 +2962,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             java.util.Set.of(), owner.getYRot(), owner.getXRot());
         this.setDeltaMovement(0, 0, 0);
         this.fallDistance = 0;
-        showDialogue("§d穿越维度完成！", 60);
+        showDialogue("\u00a7d穿越维度完成！", 60);
 
         // Update CompanionManager registration
         if (AICompanionMod.companionManager != null) {
@@ -2892,9 +3009,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     // ==================== AutoCurriculum / Autonomous Mode ====================
 
     /**
-     * 评估环境并生成课程提议。
-     * 自主模式下直接执行，手动模式下显示提议等待玩家确认。
-     */
+     * 评估环境并生成课程提议。     * 自主模式下直接执行，手动模式下显示提议等待玩家确认。     */
     private void evaluateCurriculum() {
         CurriculumProposal proposal = AutoCurriculum.proposeNextTask(this);
         if (proposal == null) return;
@@ -2904,42 +3019,40 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             executeCurriculumProposal(proposal);
         } else {
             // 手动模式：头顶显示提议，等待玩家确认
-            String msg = "§e💡 " + proposal.taskDescription + "？ §7[/companion confirm]";
+            String msg = "\u00a7e💡 " + proposal.taskDescription + " \u00a77[/companion confirm]";
             showDialogue(msg, 120); // 6秒
             this.pendingProposal = proposal;
         }
     }
 
     /**
-     * 执行课程提议 —— 根据建议的技能名查找并启动技能。
-     */
+     * 执行课程提议 —— 根据建议的技能名查找并启动技能。     */
     private void executeCurriculumProposal(CurriculumProposal proposal) {
         if (proposal.hasSkill()) {
             // "gather" is a special action that enables continuous gathering mode
             if ("gather".equals(proposal.suggestedSkill)) {
                 setGatherModeEnabled(true);
-                showDialogue("§a⛏ " + proposal.taskDescription, 60);
+                showDialogue("\u00a7a🔧" + proposal.taskDescription, 60);
                 AICompanionMod.LOGGER.info("[AutoCurriculum] Enabled gather mode: {}", proposal.taskDescription);
                 return;
             }
             Skill skill = AICompanionMod.skillLibrary.getPreset(proposal.suggestedSkill);
             if (skill != null) {
                 this.skillEngine.startSkill(skill, this);
-                showDialogue("§a🔧 " + proposal.taskDescription, 60);
+                showDialogue("\u00a7a🔧 " + proposal.taskDescription, 60);
             } else {
                 // Fallback: if skill not registered, try enabling gather mode for resource proposals
                 String skillName = proposal.suggestedSkill;
                 if (skillName != null && (skillName.startsWith("mine") || skillName.contains("Wood") || skillName.contains("collect"))) {
                     setGatherModeEnabled(true);
-                    showDialogue("§a⛏ " + proposal.taskDescription, 60);
+                    showDialogue("\u00a7a🔧" + proposal.taskDescription, 60);
                 }
             }
         }
     }
 
     /**
-     * 玩家确认当前待处理的课程提议。
-     */
+     * 玩家确认当前待处理的课程提议。     */
     public void confirmProposal() {
         if (pendingProposal != null) {
             executeCurriculumProposal(pendingProposal);
@@ -2948,34 +3061,31 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     }
 
     /**
-     * 获取当前待处理的课程提议（用于外部查询）。
-     */
+     * 获取当前待处理的课程提议（用于外部查询）。     */
     public CurriculumProposal getPendingProposal() {
         return pendingProposal;
     }
 
     /**
-     * 获取当前待处理提议的文本描述（用于 GUI 显示）。
+     * 获取当前待处理提议的文本描述（用于GUI 显示））。
      */
     public String getPendingProposalText() {
         return pendingProposal != null ? pendingProposal.taskDescription : null;
     }
 
     /**
-     * 开启/关闭自主模式。
-     */
+     * 开启/关闭自主模式     */
     public void setAutonomousMode(boolean enabled) {
         this.autonomousMode = enabled;
         if (enabled) {
-            showDialogue("§a自主模式已开启 - 我将自行决策", 60);
+            showDialogue("\u00a7a自主模式已开启 - 我将自行决策", 60);
         } else {
-            showDialogue("§7自主模式已关闭 - 等待你的指令", 60);
+            showDialogue("\u00a77自主模式已关闭 - 等待你的指令", 60);
         }
     }
 
     /**
-     * 是否处于自主模式。
-     */
+     * 是否处于自主模式     */
     public boolean isAutonomousMode() {
         return autonomousMode;
     }
@@ -2988,10 +3098,10 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     public void showDialogue(String text, int durationTicks) {
         if (text == null || text.isEmpty()) return;
         // Escape HTML-like chars
-        text = text.replace("&", "§").replace("<", "‹").replace(">", "›");
+        text = text.replace("&", "\u00a7").replace("<", "&lt;").replace(">", "&gt;");
         this.dialogueText = text;
         this.dialogueEndTick = this.tickCount + durationTicks;
-        this.setCustomName(net.minecraft.network.chat.Component.literal("§f" + text));
+        this.setCustomName(net.minecraft.network.chat.Component.literal("\u00a7f" + text));
         this.setCustomNameVisible(true);
         AICompanionMod.LOGGER.info("[AutomatonEntity] Dialogue: " + text);
     }
@@ -3005,11 +3115,12 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
 
     /** Send a chat message to the owner player */
     public void notifyOwner(String msg) {
+        if (!chatMsgEnabled) return;
         ServerPlayer owner = getOwner();
         if (owner != null) {
             String name = this.getCustomName() != null ? this.getCustomName().getString() : "同伴";
             owner.sendSystemMessage(net.minecraft.network.chat.Component.literal(
-                "§7[§b" + name + "§7] §f" + msg));
+                "\u00a77[\u00a7b" + name + "\u00a77] \u00a7f" + msg));
         }
     }
 
@@ -3018,23 +3129,26 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         if (!dialogueText.isEmpty()) return;
         String mode = getModeDataString();
         String modeIcon = switch (mode) {
-            case "guard" -> "§c🛡";
-            case "gather" -> "§6⛏";
-            case "farm" -> "§a🌾";
-            default -> "§b👤";
+            case "guard" -> "\u00a7c🛡";
+            case "gather" -> "\u00a76⛏";
+            case "farm" -> "\u00a7a🌾";
+            default -> "\u00a7b👤";
         };
         int lv = this.entityData.get(DATA_LEVEL);
+        int hp = (int) Math.ceil(this.getHealth());
+        int maxHp = (int) Math.ceil(this.getMaxHealth());
+        String hpColor = hp > maxHp * 0.6 ? "\u00a7a" : hp > maxHp * 0.3 ? "\u00a7e" : "\u00a7c";
         this.setCustomName(net.minecraft.network.chat.Component.literal(
-            "§7Lv." + lv + " " + modeIcon + " §f" + getModeDisplayName()));
+            "\u00a77Lv." + lv + " " + modeIcon + " " + hpColor + "\u2764" + hp + "/" + maxHp + " \u00a7f" + getModeDisplayName()));
         this.setCustomNameVisible(true);
     }
 
     private String getModeDisplayName() {
-        if (guardModeEnabled) return "守护中";
-        if (gatherModeEnabled) return "采集中";
-        if (farmModeEnabled) return "种植中";
-        if (followModeActive) return "跟随中";
-        return "待命中";
+        if (guardModeEnabled) return "守护";
+        if (gatherModeEnabled) return "采集";
+        if (farmModeEnabled) return "种植";
+        if (followModeActive) return "跟随";
+        return "待命";
     }
 
     // ==================== RecentEvent Inner Class ====================
@@ -3051,5 +3165,18 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             this.gameTime = gameTime;
             this.data = data != null ? new java.util.LinkedHashMap<>(data) : new java.util.LinkedHashMap<>();
         }
+    }
+
+    // ==================== Resistance Damage Reduction ====================
+
+    @Override
+    protected void actuallyHurt(net.minecraft.world.damagesource.DamageSource source, float amount) {
+        var resistance = this.getEffect(net.minecraft.world.effect.MobEffects.DAMAGE_RESISTANCE);
+        if (resistance != null) {
+            int level = resistance.getAmplifier() + 1;
+            float reduction = Math.min(0.8f, level * 0.2f);
+            amount *= (1.0f - reduction);
+        }
+        super.actuallyHurt(source, amount);
     }
 }

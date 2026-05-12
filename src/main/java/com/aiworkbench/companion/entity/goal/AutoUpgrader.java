@@ -23,7 +23,7 @@ public final class AutoUpgrader {
 
     /** 升级冷却（避免每tick检查） */
     private static final int CHECK_INTERVAL = 200; // 10秒
-    private static long lastCheckTick;
+
 
     // 升级目标：镐子 → 斧头 → 剑 → 护甲
     private static final List<Item> PICKAXE_TIERS = List.of(
@@ -43,8 +43,8 @@ public final class AutoUpgrader {
     public static String tryUpgrade(AutomatonEntity entity) {
         if (entity.level().isClientSide) return null;
         long now = entity.level().getGameTime();
-        if (now - lastCheckTick < CHECK_INTERVAL) return null;
-        lastCheckTick = now;
+        if (now - entity.getAutoUpgradeLastCheckTick() < CHECK_INTERVAL) return null;
+        entity.setAutoUpgradeLastCheckTick(now);
 
         // 检查当前装备
         ItemStack current = entity.getItemBySlot(EquipmentSlot.MAINHAND);
@@ -74,7 +74,11 @@ public final class AutoUpgrader {
             Item target = tiers.get(t);
             String result = craftIfPossible(entity, target);
             if (result != null) {
-                equipBestInInventory(entity, target.getClass());
+                Class<?> toolClass = target instanceof PickaxeItem ? PickaxeItem.class
+                    : target instanceof AxeItem ? AxeItem.class
+                    : target instanceof SwordItem ? SwordItem.class
+                    : target.getClass();
+                equipBestInInventory(entity, toolClass);
                 AICompanionMod.LOGGER.info("[AutoUpgrade] Upgraded {} to {} ({})",
                     typeName, target, result);
                 entity.showDialogue("§d🔧 升级为" + target.getDescription().getString(), 40);
@@ -89,6 +93,7 @@ public final class AutoUpgrader {
      * @return 合成来源描述（如"3铁锭+2木棍"），失败返回null
      */
     private static String craftIfPossible(AutomatonEntity entity, Item target) {
+        if (!hasCraftingTable(entity)) return null;
         // 获取合成配方
         List<Ingredient> recipe = getShapedRecipe(target);
         if (recipe == null || recipe.isEmpty()) return null;
@@ -157,17 +162,30 @@ public final class AutoUpgrader {
 
     /** 获取物品在工作台中合成的材料列表（简化版，只处理镐/斧/剑） */
     private static List<Ingredient> getShapedRecipe(Item target) {
+        Ingredient mat = getMaterial(target);
+        if (mat == null) return null;
+
+        boolean isAxe = AXE_TIERS.contains(target);
+        boolean isSword = SWORD_TIERS.contains(target);
+
+        if (isSword) {
+            return recipe(mat, mat, Ingredient.of(Items.STICK));
+        } else if (isAxe) {
+            return recipe(mat, mat, Ingredient.of(Items.STICK), Ingredient.of(Items.STICK));
+        } else {
+            return recipe(mat, mat, mat, Ingredient.of(Items.STICK), Ingredient.of(Items.STICK));
+        }
+    }
+
+    private static Ingredient getMaterial(Item target) {
         if (target == Items.WOODEN_PICKAXE || target == Items.WOODEN_AXE || target == Items.WOODEN_SWORD)
-            return recipe(PLANKS, PLANKS, PLANKS, Ingredient.of(Items.STICK), Ingredient.of(Items.STICK));
+            return PLANKS;
         if (target == Items.STONE_PICKAXE || target == Items.STONE_AXE || target == Items.STONE_SWORD)
-            return recipe(Ingredient.of(Items.COBBLESTONE), Ingredient.of(Items.COBBLESTONE),
-                         Ingredient.of(Items.COBBLESTONE), Ingredient.of(Items.STICK), Ingredient.of(Items.STICK));
+            return Ingredient.of(Items.COBBLESTONE);
         if (target == Items.IRON_PICKAXE || target == Items.IRON_AXE || target == Items.IRON_SWORD)
-            return recipe(Ingredient.of(Items.IRON_INGOT), Ingredient.of(Items.IRON_INGOT),
-                         Ingredient.of(Items.IRON_INGOT), Ingredient.of(Items.STICK), Ingredient.of(Items.STICK));
+            return Ingredient.of(Items.IRON_INGOT);
         if (target == Items.DIAMOND_PICKAXE || target == Items.DIAMOND_AXE || target == Items.DIAMOND_SWORD)
-            return recipe(Ingredient.of(Items.DIAMOND), Ingredient.of(Items.DIAMOND),
-                         Ingredient.of(Items.DIAMOND), Ingredient.of(Items.STICK), Ingredient.of(Items.STICK));
+            return Ingredient.of(Items.DIAMOND);
         return null;
     }
 
@@ -188,7 +206,8 @@ public final class AutoUpgrader {
     public static boolean trySmeltIfNeeded(AutomatonEntity entity) {
         if (entity.level().isClientSide) return false;
 
-        // 有矿可烧吗
+        retrieveSmeltedItems(entity);
+
         boolean hasIronOre = countItem(entity, Items.IRON_ORE) + countItem(entity, Items.RAW_IRON) >= 1;
         boolean hasGoldOre = countItem(entity, Items.GOLD_ORE) + countItem(entity, Items.RAW_GOLD) >= 1;
         if (!hasIronOre && !hasGoldOre) return false;
@@ -325,6 +344,25 @@ public final class AutoUpgrader {
         }
     }
 
+    private static void retrieveSmeltedItems(AutomatonEntity entity) {
+        var searchPos = entity.blockPosition().offset(-8, -4, -8);
+        for (int dx = 0; dx < 16; dx++) {
+            for (int dy = 0; dy < 9; dy++) {
+                for (int dz = 0; dz < 16; dz++) {
+                    var pos = searchPos.offset(dx, dy, dz);
+                    var be = entity.level().getBlockEntity(pos);
+                    if (!(be instanceof net.minecraft.world.level.block.entity.AbstractFurnaceBlockEntity furnace)) continue;
+                    var output = furnace.getItem(2);
+                    if (!output.isEmpty()) {
+                        entity.addItemToInventory(output.copy());
+                        furnace.setItem(2, net.minecraft.world.item.ItemStack.EMPTY);
+                        furnace.setChanged();
+                    }
+                }
+            }
+        }
+    }
+
     private static boolean startSmelting(AutomatonEntity entity, BlockPos furnacePos) {
         net.minecraft.world.level.Level level = entity.level();
         if (!(level.getBlockState(furnacePos).getBlock() instanceof net.minecraft.world.level.block.FurnaceBlock))
@@ -334,25 +372,24 @@ public final class AutoUpgrader {
             (net.minecraft.world.level.block.entity.FurnaceBlockEntity) level.getBlockEntity(furnacePos);
         if (furnace == null) return false;
 
-        // 放入矿石（一次放满：最多64个）
         ItemStack smeltInput = furnace.getItem(0);
-        if (!smeltInput.isEmpty()) return false; // 熔炉忙
+        if (!smeltInput.isEmpty()) return false;
+
+        int fuelSlot = findItemSlot(entity, Items.COAL, Items.CHARCOAL);
+        if (fuelSlot < 0) return false;
 
         int oreSlot = findItemSlot(entity, Items.IRON_ORE, Items.RAW_IRON);
         if (oreSlot < 0) return false;
+
         ItemStack ore = entity.getItem(oreSlot);
         int putCount = Math.min(ore.getCount(), 64);
         furnace.setItem(0, ore.copyWithCount(putCount));
         ore.shrink(putCount);
         if (ore.isEmpty()) entity.setItem(oreSlot, ItemStack.EMPTY);
 
-        // 放入燃料（1煤=8矿，按比例放）
-        int fuelSlot = findItemSlot(entity, Items.COAL, Items.CHARCOAL);
-        if (fuelSlot < 0) return false;
         ItemStack fuel = entity.getItem(fuelSlot);
         ItemStack smeltFuel = furnace.getItem(1);
         if (!smeltFuel.isEmpty()) {
-            // 燃料槽有东西→不覆盖
             entity.showDialogue("§8🔥 冶炼中...", 30);
             return true;
         }

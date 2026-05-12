@@ -50,6 +50,12 @@ public class CompanionLifecycleCommands {
                                                 IntegerArgumentType.getInteger(ctx, "range")))))
                         .then(Commands.literal("valuable")
                                 .executes(ctx -> toggleValuable(ctx.getSource()))))
+                // Chat message toggle
+                .then(Commands.literal("chatmsg")
+                        .then(Commands.literal("on")
+                                .executes(ctx -> setChatMsg(ctx.getSource(), true)))
+                        .then(Commands.literal("off")
+                                .executes(ctx -> setChatMsg(ctx.getSource(), false))))
                 // Stats commands
                 .then(Commands.literal("stats")
                         .executes(ctx -> showStats(ctx.getSource()))
@@ -388,6 +394,19 @@ public class CompanionLifecycleCommands {
         boolean valuable = !companion.isPickupOnlyValuable();
         companion.setPickupOnlyValuable(valuable);
         source.sendSuccess(() -> Component.literal(valuable ? "§e贵重模式: 仅拾取贵重物品" : "§a全部模式: 拾取所有物品"), false);
+        return 1;
+    }
+
+    private static int setChatMsg(CommandSourceStack source, boolean enabled) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) return 0;
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("你没有同伴"));
+            return 0;
+        }
+        companion.setChatMsgEnabled(enabled);
+        source.sendSuccess(() -> Component.literal(enabled ? "§a聊天消息: 开启" : "§7聊天消息: 关闭（头顶对话仍有效）"), false);
         return 1;
     }
 

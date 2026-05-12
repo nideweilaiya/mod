@@ -12,6 +12,8 @@ import net.minecraft.world.entity.monster.*;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.ProjectileUtil;
 import net.minecraft.world.item.*;
+import net.minecraft.world.item.enchantment.EnchantmentHelper;
+import net.minecraft.world.item.enchantment.Enchantments;
 import net.minecraft.world.phys.Vec3;
 
 import javax.annotation.Nullable;
@@ -98,21 +100,34 @@ public class CompanionGuardGoal extends Goal {
     @Override
     public void stop() {
         inCombat = false;
-        // Save enemy name before nullifying target
         String enemyName = target != null ? target.getName().getString() : "敌人";
         target = null;
         equipped = false;
         companion.setGuardTarget(null);
         companion.getNavigation().stop();
         companion.setGuardModeEnabled(false);
-        // Restore to follow mode (not hardcoded gather)
-        companion.returnToFollow();
-        // Instant hardcoded feedback
-        companion.showDialogue("§a威胁清除", 40);
-        // Record event + trigger LLM contextual dialogue
+        // Restore the mode that was active before combat interrupted
+        String previous = companion.getPreCombatMode();
+        companion.setPreCombatMode("follow");
+        switch (previous) {
+            case "gather" -> {
+                companion.setGatherModeEnabled(true);
+                companion.showDialogue("§a威胁清除，继续采集", 40);
+                AICompanionMod.LOGGER.info("[GuardGoal] Disengaged → restore gather");
+            }
+            case "farm" -> {
+                companion.setFarmModeEnabled(true);
+                companion.showDialogue("§a威胁清除，继续种植", 40);
+                AICompanionMod.LOGGER.info("[GuardGoal] Disengaged → restore farm");
+            }
+            default -> {
+                companion.returnToFollow();
+                companion.showDialogue("§a威胁清除", 40);
+                AICompanionMod.LOGGER.info("[GuardGoal] Disengaged → follow");
+            }
+        }
         companion.addRecentEvent("combat_end", "击败了" + enemyName);
         companion.triggerEventResponse("combat_end", java.util.Map.of("enemy", enemyName));
-        AICompanionMod.LOGGER.info("[GuardGoal] Disengaged → follow");
     }
 
     @Override
@@ -121,6 +136,12 @@ public class CompanionGuardGoal extends Goal {
 
         // 进入战斗自动装备
         if (!equipped) { equipForCombat(); equipped = true; }
+
+        // Check weapon durability
+        ItemStack weapon = companion.getItemBySlot(EquipmentSlot.MAINHAND);
+        if (weapon.getMaxDamage() > 0 && weapon.getMaxDamage() - weapon.getDamageValue() <= 5) {
+            equipBestWeapon();
+        }
 
         // 低血撤退
         if (companion.getHealth() < RETREAT_HEALTH) {
@@ -203,21 +224,46 @@ public class CompanionGuardGoal extends Goal {
         ItemStack bow = findBow();
         if (bow.isEmpty()) return;
 
-        // 模拟射箭
         Vec3 aim = target.getEyePosition().subtract(companion.getEyePosition()).normalize();
-        net.minecraft.world.entity.projectile.Arrow arrow =
+        net.minecraft.world.entity.projectile.AbstractArrow arrow =
             new net.minecraft.world.entity.projectile.Arrow(
                 net.minecraft.world.entity.EntityType.ARROW, companion.level());
         arrow.setOwner(companion);
         arrow.setPos(companion.getEyePosition());
         arrow.shoot(aim.x, aim.y, aim.z, 1.6f, 1.0f);
-        arrow.setCritArrow(bowUseTicks >= BOW_CHARGE_TIME);
-        companion.level().addFreshEntity(arrow);
-        companion.animateSwing(); // 放箭瞬间挥臂
 
-        // 消耗箭
-        consumeArrow();
-        // 消耗弓耐久
+        if (bowUseTicks >= BOW_CHARGE_TIME) {
+            arrow.setCritArrow(true);
+        }
+
+        int powerLevel = EnchantmentHelper.getItemEnchantmentLevel(
+            Enchantments.POWER_ARROWS, bow);
+        if (powerLevel > 0) {
+            arrow.setBaseDamage(arrow.getBaseDamage() + (double) powerLevel * 0.5D + 0.5D);
+        }
+
+        int punchLevel = EnchantmentHelper.getItemEnchantmentLevel(
+            Enchantments.PUNCH_ARROWS, bow);
+        if (punchLevel > 0) {
+            arrow.setKnockback(punchLevel);
+        }
+
+        int flameLevel = EnchantmentHelper.getItemEnchantmentLevel(
+            Enchantments.FLAMING_ARROWS, bow);
+        if (flameLevel > 0) {
+            arrow.setSecondsOnFire(100);
+        }
+
+        int infinityLevel = EnchantmentHelper.getItemEnchantmentLevel(
+            Enchantments.INFINITY_ARROWS, bow);
+
+        companion.level().addFreshEntity(arrow);
+        companion.animateSwing();
+
+        if (infinityLevel <= 0) {
+            consumeArrow();
+        }
+
         bow.hurtAndBreak(1, companion, e -> {});
     }
 
@@ -337,7 +383,7 @@ public class CompanionGuardGoal extends Goal {
     // ===== 工具方法 =====
 
     private boolean hasBowAndArrow() {
-        return findBow() != null && hasArrow();
+        return !findBow().isEmpty() && hasArrow();
     }
 
     private ItemStack findBow() {
@@ -349,7 +395,7 @@ public class CompanionGuardGoal extends Goal {
             ItemStack s = companion.getItem(i);
             if (s.getItem() instanceof BowItem) return s;
         }
-        return null;
+        return ItemStack.EMPTY;
     }
 
     private boolean hasArrow() {

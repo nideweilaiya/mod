@@ -25,7 +25,7 @@ import java.util.EnumSet;
  */
 public class CompanionSurvivalGoal extends Goal {
     private final AutomatonEntity companion;
-    private static final int LIGHT_THRESHOLD = 7;
+    private static final int LIGHT_THRESHOLD = 8;
     private static final int TORCH_RADIUS = 6;
     private static final int CHECK_INTERVAL = 200; // 10秒检查一次
     private int checkTimer;
@@ -39,11 +39,12 @@ public class CompanionSurvivalGoal extends Goal {
     @Override
     public boolean canUse() {
         if (companion.isSkillActive()) return false;
-        if (companion.level().isDay()) return false;
-        // 只在跟随或采集模式时激活
         if (!companion.isFollowModeActive() && !companion.isGatherModeEnabled()) return false;
-        // 不在露天→不需要
-        if (!companion.level().canSeeSky(companion.blockPosition())) return false;
+
+        int blockLight = companion.level().getBrightness(LightLayer.BLOCK, companion.blockPosition());
+
+        if (companion.level().canSeeSky(companion.blockPosition()) && companion.level().isDay()) return false;
+        if (blockLight >= LIGHT_THRESHOLD) return false;
 
         checkTimer++;
         if (checkTimer < CHECK_INTERVAL) return false;
@@ -53,8 +54,8 @@ public class CompanionSurvivalGoal extends Goal {
 
     @Override
     public boolean canContinueToUse() {
-        return torchTarget != null && !companion.level().isDay()
-            && companion.level().getBlockState(torchTarget).isAir();
+        return torchTarget != null
+            && companion.level().getBlockState(torchTarget.above()).isAir();
     }
 
     @Override
@@ -147,14 +148,16 @@ public class CompanionSurvivalGoal extends Goal {
 
         // 放置火把
         if (level.getBlockState(place).isAir()) {
-            level.setBlock(place, Blocks.TORCH.defaultBlockState(), 3);
+            var torchState = Blocks.TORCH.defaultBlockState();
+            if (!torchState.canSurvive(level, place)) return;
+            level.setBlock(place, torchState, 3);
             companion.animateBlockPlace(place);
             torch.shrink(1);
             if (torch.isEmpty()) {
-                // 从背包中移除空堆叠
                 for (int i = 0; i < companion.getInventorySize(); i++) {
-                    if (companion.getItem(i).isEmpty() && companion.getItem(i) == torch) {
-                        // Just consume the item
+                    if (companion.getItem(i) == torch) {
+                        companion.setItem(i, ItemStack.EMPTY);
+                        break;
                     }
                 }
             }
@@ -198,7 +201,7 @@ public class CompanionSurvivalGoal extends Goal {
         ItemStack torches = new ItemStack(Items.TORCH, 4);
         companion.addItemToInventory(torches);
         companion.showDialogue("§e合成火把×4", 30);
-        return new ItemStack(Items.TORCH); // 返回1个用于放置
+        return findTorch();
     }
 
     // ===== 简易庇护所 =====

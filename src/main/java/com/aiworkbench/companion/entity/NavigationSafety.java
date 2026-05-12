@@ -23,6 +23,9 @@ public class NavigationSafety {
         BlockState headState = level.getBlockState(pos.above());
         if (isDangerous(headState)) return false;
 
+        // Check that there is solid ground below to stand on
+        if (!level.getBlockState(pos.below()).isSolid()) return false;
+
         return true;
     }
 
@@ -43,8 +46,11 @@ public class NavigationSafety {
         // Wither rose
         if (state.is(Blocks.WITHER_ROSE)) return true;
 
-        // Water (companion can't swim, avoid)
-        if (state.is(Blocks.WATER)) return true;
+        // Powder snow (freezing damage)
+        if (state.is(Blocks.POWDER_SNOW)) return true;
+
+        // Campfires (fire damage when stepped on)
+        if (state.is(Blocks.CAMPFIRE) || state.is(Blocks.SOUL_CAMPFIRE)) return true;
 
         return false;
     }

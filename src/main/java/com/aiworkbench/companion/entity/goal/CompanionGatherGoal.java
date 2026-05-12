@@ -117,8 +117,9 @@ public class CompanionGatherGoal extends Goal {
     @Override public boolean canContinueToUse() {
         if (!companion.isGatherModeEnabled() || companion.isSkillActive()) return false;
         if (companion.isGuardModeEnabled()) return false;
-        // 采集过程中遇敌→暂停采集，切守护
+        // 采集过程中遇敌→暂停采集，切守护（记住战前模式）
         if (hostilesNearby()) {
+            companion.setPreCombatMode("gather");
             companion.setGuardModeEnabled(true);
             companion.setGatherModeEnabled(false);
             companion.showDialogue("§c敌人！切换战斗", 40);
@@ -251,11 +252,24 @@ public class CompanionGatherGoal extends Goal {
             // 切换工具
             switchTool();
 
+            // Check tool durability - if low, try to swap
+            ItemStack currentTool = companion.getEquippedTool();
+            if (currentTool.getMaxDamage() > 0 && currentTool.getMaxDamage() - currentTool.getDamageValue() <= 5) {
+                if (!trySwapTool()) {
+                    companion.tryAcquireTool();
+                }
+            }
+
             BlockState state = companion.level().getBlockState(target);
             if (state.isAir()) { target = null; return; }
 
             float hardness = state.getBlock().defaultDestroyTime();
-            if (hardness < 0) hardness = 50f; // 基岩等不可破坏
+            if (hardness < 0) {
+                blacklist.add(target.immutable());
+                blacklistTicks = BLACKLIST_DURATION;
+                target = null;
+                return;
+            }
             float ts = companion.getEffectiveDigSpeed(state);
             progress += ts / (hardness * 30f); // 原版玩家公式
             isBreaking = true;
@@ -442,6 +456,7 @@ public class CompanionGatherGoal extends Goal {
                     if (blacklist.contains(p)) continue;
                     BlockState s = level.getBlockState(p);
                     if (s.isAir()) continue;
+                    if (s.getBlock().defaultDestroyTime() < 0) continue;
 
                     String name = s.getBlock().builtInRegistryHolder().key().location().getPath();
                     int score = getScore(name);
@@ -517,7 +532,7 @@ public class CompanionGatherGoal extends Goal {
             if (p.equals(last)) continue;
             last = p;
             BlockState s = level.getBlockState(p);
-            if (!s.isAir() && isBarrier(s.getBlock().builtInRegistryHolder().key().location().getPath()))
+            if (!s.isAir() && s.getBlock().defaultDestroyTime() >= 0 && isBarrier(s.getBlock().builtInRegistryHolder().key().location().getPath()))
                 return p.immutable();
         }
         return null;
@@ -556,12 +571,41 @@ public class CompanionGatherGoal extends Goal {
     }
 
     // ===== 工具 =====
+    private boolean trySwapTool() {
+        ItemStack current = companion.getItemBySlot(net.minecraft.world.entity.EquipmentSlot.MAINHAND);
+        if (current.isEmpty()) return false;
+        Class<?> toolClass = current.getItem() instanceof net.minecraft.world.item.PickaxeItem
+            ? net.minecraft.world.item.PickaxeItem.class
+            : current.getItem() instanceof net.minecraft.world.item.AxeItem
+                ? net.minecraft.world.item.AxeItem.class : null;
+        if (toolClass == null) return false;
+
+        int bestSlot = -1;
+        int bestDurability = 0;
+        for (int i = 0; i < companion.getInventorySize(); i++) {
+            ItemStack stack = companion.getItem(i);
+            if (stack.isEmpty() || !toolClass.isInstance(stack.getItem())) continue;
+            int durability = stack.getMaxDamage() - stack.getDamageValue();
+            if (durability > 5 && durability > bestDurability) {
+                bestDurability = durability;
+                bestSlot = i;
+            }
+        }
+        if (bestSlot >= 0) {
+            ItemStack newTool = companion.getItem(bestSlot).copy();
+            companion.setItem(bestSlot, current.copy());
+            companion.setItemSlot(net.minecraft.world.entity.EquipmentSlot.MAINHAND, newTool);
+            companion.animateSwing();
+            return true;
+        }
+        return false;
+    }
     private void switchTool() {
         if (target == null) return;
         BlockState s = companion.level().getBlockState(target);
         if (s.isAir()) return;
         boolean needAxe = isWood(s.getBlock().builtInRegistryHolder().key().location().getPath());
-        ItemStack cur = companion.getItemBySlot(EquipmentSlot.MAINHAND);
+        ItemStack cur = companion.getEquippedTool();
         if (needAxe && cur.getItem() instanceof AxeItem) return;
         if (!needAxe && cur.getItem() instanceof PickaxeItem) return;
 
@@ -587,14 +631,16 @@ public class CompanionGatherGoal extends Goal {
         Level level = companion.level();
         BlockState s = level.getBlockState(pos);
         if (!(level instanceof ServerLevel sl)) return;
-        ItemStack tool = companion.getItemBySlot(EquipmentSlot.MAINHAND);
+        ItemStack tool = companion.getEquippedTool();
 
-        boolean isLeaf = s.getBlock() instanceof net.minecraft.world.level.block.LeavesBlock;
-        List<ItemStack> drops = Block.getDrops(s, sl, pos, null, companion,
-            isLeaf ? ItemStack.EMPTY : tool);
+        List<ItemStack> drops = Block.getDrops(s, sl, pos,
+            level.getBlockEntity(pos), companion, tool);
 
         level.setBlock(pos, Blocks.AIR.defaultBlockState(), 3);
-        // 方块破坏粒子特效
+        ItemStack heldTool = companion.getItemBySlot(EquipmentSlot.MAINHAND);
+        if (!heldTool.isEmpty() && heldTool.isDamageableItem()) {
+            heldTool.hurtAndBreak(1, companion, e -> e.broadcastBreakEvent(EquipmentSlot.MAINHAND));
+        }
         level.levelEvent(2001, pos, net.minecraft.world.level.block.Block.getId(s));
         for (ItemStack d : drops) {
             if (!d.isEmpty()) { collected++; companion.addItemToInventory(d); }
@@ -643,6 +689,7 @@ public class CompanionGatherGoal extends Goal {
                     BlockPos p = o.offset(dx, dy, dz);
                     BlockState s = l.getBlockState(p);
                     if (s.isAir()) continue;
+                    if (s.getBlock().defaultDestroyTime() < 0) continue;
                     String n = s.getBlock().builtInRegistryHolder().key().location().getPath();
                     int score = 0;
                     if (PRI.containsKey(n)) score = PRI.get(n);

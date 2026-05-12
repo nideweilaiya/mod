@@ -105,7 +105,7 @@ public class CompanionFarmGoal extends Goal {
         if (!companion.isFarmModeEnabled() || companion.isSkillActive()) return false;
         if (companion.isGuardModeEnabled()) return false;
         if (hostilesNearby()) {
-            companion.setPreCombatMode("farm");
+            companion.savePreCombatState();
             companion.setGuardModeEnabled(true);
             companion.setFarmModeEnabled(false);
             companion.showDialogue("§c敌人！切换战斗", 40);

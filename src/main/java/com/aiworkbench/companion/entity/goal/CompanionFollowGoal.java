@@ -42,12 +42,13 @@ public class CompanionFollowGoal extends Goal {
     @Override
     public boolean canUse() {
         if (companion.isSkillActive()) return false;
+        if (!companion.isFollowModeActive()) return false;
         return enabled && companion.getOwnerUUID() != null && getOwner() != null;
     }
 
     @Override
     public boolean canContinueToUse() {
-        return enabled && canUse();
+        return enabled && companion.isFollowModeActive() && companion.getOwnerUUID() != null && getOwner() != null;
     }
 
     @Override

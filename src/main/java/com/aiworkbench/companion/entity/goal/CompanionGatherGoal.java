@@ -2,6 +2,7 @@ package com.aiworkbench.companion.entity.goal;
 
 import com.aiworkbench.companion.AICompanionMod;
 import com.aiworkbench.companion.entity.AutomatonEntity;
+import com.aiworkbench.companion.skill.Skill;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.EquipmentSlot;
@@ -119,7 +120,7 @@ public class CompanionGatherGoal extends Goal {
         if (companion.isGuardModeEnabled()) return false;
         // 采集过程中遇敌→暂停采集，切守护（记住战前模式）
         if (hostilesNearby()) {
-            companion.setPreCombatMode("gather");
+            companion.savePreCombatState();
             companion.setGuardModeEnabled(true);
             companion.setGatherModeEnabled(false);
             companion.showDialogue("§c敌人！切换战斗", 40);
@@ -212,8 +213,19 @@ public class CompanionGatherGoal extends Goal {
                 target.getX(), target.getY(), target.getZ(), speed);
             isBreaking = false; progress = 0f; mineTicks = 0;
         } else {
-            // 接近目标→射线检测是否能看到
+            // 接近目标→尝试用SkillEngine执行单方块采集（概念验证）
             companion.getNavigation().stop();
+
+            if (!companion.getSkillEngine().isActive()) {
+                String blockName = companion.level().getBlockState(target).getBlock()
+                    .builtInRegistryHolder().key().location().getPath();
+                Skill skill = companion.planTask("mine " + blockName);
+                if (skill != null) {
+                    companion.getSkillEngine().startSkill(skill, companion);
+                    AICompanionMod.LOGGER.info("[GatherGoal] Delegated to SkillEngine: {}", skill.getName());
+                    return; // SkillEngine接管，GatherGoal暂停
+                }
+            }
 
             var hit = canSeeAndReach(target);
             if (hit == null || !hit.getBlockPos().equals(target)) {

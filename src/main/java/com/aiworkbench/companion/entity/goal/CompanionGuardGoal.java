@@ -108,15 +108,15 @@ public class CompanionGuardGoal extends Goal {
         companion.getNavigation().stop();
         companion.setGuardModeEnabled(false);
         // Restore the mode that was active before combat interrupted
-        String previous = companion.getPreCombatMode();
-        companion.setPreCombatMode("follow");
+        var previous = companion.getPreCombatState();
+        companion.setPreCombatMode("follow"); // reset to default
         switch (previous) {
-            case "gather" -> {
+            case GATHER -> {
                 companion.setGatherModeEnabled(true);
                 companion.showDialogue("§a威胁清除，继续采集", 40);
                 AICompanionMod.LOGGER.info("[GuardGoal] Disengaged → restore gather");
             }
-            case "farm" -> {
+            case FARM -> {
                 companion.setFarmModeEnabled(true);
                 companion.showDialogue("§a威胁清除，继续种植", 40);
                 AICompanionMod.LOGGER.info("[GuardGoal] Disengaged → restore farm");

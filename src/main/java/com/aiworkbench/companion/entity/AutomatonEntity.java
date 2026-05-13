@@ -2572,11 +2572,11 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
      */
     public String getCurrentModeString() {
         return switch (currentState) {
-            case GUARD -> "u00a7c守护";
-            case GATHER -> "u00a76采集";
-            case FARM -> "u00a7a种植";
-            case PATROL -> "u00a7b巡逻";
-            default -> "u00a7a跟随";
+            case GUARD -> "§c守护";
+            case GATHER -> "§6采集";
+            case FARM -> "§a种植";
+            case PATROL -> "§b巡逻";
+            default -> "§a跟随";
         };
     }
 

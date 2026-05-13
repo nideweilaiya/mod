@@ -68,7 +68,7 @@ public class CompanionQuickMenuScreen extends Screen {
 
         // 属性加点
         addRenderableWidget(Button.builder(Component.literal("§d✨ 属性加点"), btn -> {
-            this.minecraft.setScreen(new CompanionSettingsScreen(parent));
+            this.minecraft.setScreen(new CompanionSettingsScreen(parent, c));
         }).bounds(cx - btnW/2, y, btnW, btnH).build());
         y += btnH + gap;
 
@@ -80,7 +80,7 @@ public class CompanionQuickMenuScreen extends Screen {
 
         // 设置
         addRenderableWidget(Button.builder(Component.literal("§d⚙ 同伴设置"), btn -> {
-            this.minecraft.setScreen(new CompanionSettingsScreen(parent));
+            this.minecraft.setScreen(new CompanionSettingsScreen(parent, c));
         }).bounds(cx - btnW/2, y, btnW, btnH).build());
         y += btnH + gap + 4;
 

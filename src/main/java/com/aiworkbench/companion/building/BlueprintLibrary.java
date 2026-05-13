@@ -128,19 +128,20 @@ public class BlueprintLibrary {
         for (int x = 0; x < 5; x++)
             for (int z = 0; z < 5; z++)
                 bp.add(x, 0, z, w);
-        // 墙壁 y=1,2,3
-        for (int y = 1; y <= 3; y++) {
+        // 墙壁 y=1,2 (y=3 由屋顶覆盖，不重复放置)
+        for (int y = 1; y <= 2; y++) {
             for (int x = 0; x < 5; x++) {
-                bp.add(x, y, 0, w);  // 北墙
-                bp.add(x, y, 4, w);  // 南墙
+                // 北墙 — x=2 留空作为门洞
+                if (x != 2) bp.add(x, y, 0, w);
+                // 南墙 — 不留门洞
+                bp.add(x, y, 4, w);
             }
             for (int z = 1; z < 4; z++) {
                 bp.add(0, y, z, w);  // 西墙
                 bp.add(4, y, z, w);  // 东墙
             }
         }
-        // 门洞 (y=1,2, x=2, z=0 处留空) — 已在北墙中包含
-        // 屋顶
+        // 屋顶 (y=3, 同时覆盖墙壁顶部)
         for (int x = 0; x < 5; x++)
             for (int z = 0; z < 5; z++)
                 bp.add(x, 3, z, w);

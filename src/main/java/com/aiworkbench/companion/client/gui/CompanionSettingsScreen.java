@@ -39,13 +39,17 @@ public class CompanionSettingsScreen extends Screen {
     private AutomatonEntity companion;
 
     public CompanionSettingsScreen(Screen parent) {
+        this(parent, null);
+    }
+
+    public CompanionSettingsScreen(Screen parent, AutomatonEntity knownCompanion) {
         super(Component.literal("同伴设置"));
         this.parent = parent;
         if (Minecraft.getInstance().player != null) {
             currentModel = CompanionConfig.getModel(Minecraft.getInstance().player.getUUID());
         }
-        // Read companion from client state
-        companion = CompanionClientState.getCompanion();
+        // Use provided reference or search from client state
+        companion = knownCompanion != null ? knownCompanion : CompanionClientState.getCompanion();
     }
 
     @Override
@@ -244,6 +248,22 @@ public class CompanionSettingsScreen extends Screen {
                 sendCmd("companion stats reset");
                 statusMessage = "§e属性已重置";
             }).bounds(cx - 40, r4 + 26, 80, 16).build());
+        } else {
+            // 同伴未加载 — 显示诊断信息和替代方案
+            addRenderableWidget(Button.builder(
+                Component.literal("§c⚠ 未找到同伴"), btn -> {})
+                .bounds(cx - 60, stY, 120, 14).build());
+            addRenderableWidget(Button.builder(
+                Component.literal("§7可能原因: 同伴在另一维度 / 太远未加载 / 已死亡"), btn -> {})
+                .bounds(cx - 130, stY + 18, 260, 14).build());
+            addRenderableWidget(Button.builder(
+                Component.literal("§a🔄 重新查找"), btn -> {
+                    companion = CompanionClientState.getCompanion();
+                    init();
+                }).bounds(cx - 40, stY + 36, 80, 18).build());
+            addRenderableWidget(Button.builder(
+                Component.literal("§e💡 也可用命令: /companion stats add <属性> <点数>"), btn -> {})
+                .bounds(cx - 120, stY + 58, 240, 14).build());
         }
 
         // ===== 拾取控制区域 =====
@@ -396,7 +416,7 @@ public class CompanionSettingsScreen extends Screen {
             if (this.minecraft != null) {
                 this.minecraft.execute(() -> {
                     if (this.minecraft.screen == CompanionSettingsScreen.this) {
-                        this.minecraft.setScreen(new CompanionSettingsScreen(parent));
+                        this.minecraft.setScreen(new CompanionSettingsScreen(parent, companion));
                     }
                 });
             }

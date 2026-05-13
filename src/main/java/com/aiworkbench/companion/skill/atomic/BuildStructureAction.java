@@ -84,8 +84,11 @@ public class BuildStructureAction implements AtomicAction {
 
         // 检查是否有对应方块
         if (!hasBlock(entity, blockType)) {
-            AICompanionMod.LOGGER.info("[BuildStructure] No {} left, stopping at {}/{}",
-                blockType.getName().getString(), currentIndex, placements.size());
+            int remaining = placements.size() - currentIndex;
+            String blockName = blockType.getName().getString();
+            AICompanionMod.LOGGER.info("[BuildStructure] No {} left, stopped at {}/{} ({} blocks remaining)",
+                blockName, currentIndex, placements.size(), remaining);
+            entity.notifyOwner("§c缺少" + blockName + "！建造暂停(" + currentIndex + "/" + placements.size() + ")");
             done = true;
             return true;
         }
@@ -131,6 +134,9 @@ public class BuildStructureAction implements AtomicAction {
                         stack.shrink(1);
                         if (stack.isEmpty()) entity.setItem(i, ItemStack.EMPTY);
                         return true;
+                    } else {
+                        AICompanionMod.LOGGER.debug("[BuildStructure] {} cannot survive at {}, skipping",
+                            blockType.getName().getString(), pos);
                     }
                 }
             }

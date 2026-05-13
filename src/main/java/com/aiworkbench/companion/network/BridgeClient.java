@@ -40,7 +40,7 @@ public class BridgeClient implements AutoCloseable {
 
     private Socket socket;
     private BufferedReader reader;
-    private PrintWriter writer;
+    private volatile PrintWriter writer;
     private volatile boolean connected = false;
     private volatile boolean running = false;
     private int reconnectAttempts = 0;
@@ -124,12 +124,7 @@ public class BridgeClient implements AutoCloseable {
         int jitter = random.nextInt(Math.min(delay, 5)); // 0-4s jitter
         int actualDelay = delay + jitter;
         AICompanionMod.LOGGER.info("[Bridge] Reconnect attempt " + reconnectAttempts + "/" + MAX_RECONNECT_ATTEMPTS + " in " + actualDelay + "s (base=" + delay + ")");
-        try {
-            Thread.sleep(actualDelay * 1000L);
-            connect();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+        scheduler.schedule(() -> connect(), actualDelay, TimeUnit.SECONDS);
     }
 
     private void disconnect() {

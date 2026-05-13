@@ -62,15 +62,21 @@ public class CompanionCoreItem extends Item {
             return false;
         }
 
-        // Check if player already has a companion
-        if (manager.hasCompanion(player.getUUID())) {
-            player.sendSystemMessage(Component.literal("§cYou already have a companion!"));
+        // Check if player can recruit a new companion (满级门控)
+        if (!manager.canRecruitNewCompanion(player.getUUID())) {
+            int size = manager.squadSize(player.getUUID());
+            if (size >= 3) {
+                player.sendSystemMessage(Component.literal("§c已达最大同伴数量(3个)!"));
+            } else {
+                player.sendSystemMessage(Component.literal("§c需要当前同伴满级(Lv." + AutomatonEntity.MAX_LEVEL + ")才能招募新同伴!"));
+            }
             return false;
         }
 
-        // Spawn companion
+        // Spawn companion with GENERAL role (use /companion squad create <role> for specific roles)
         ServerLevel level = player.serverLevel();
         AutomatonEntity companion = AutomatonEntity.create(level, "default_companion", player);
+        companion.setRole(com.aiworkbench.companion.manager.CompanionRole.GENERAL);
         boolean success = level.addFreshEntity(companion);
 
         if (!success) {

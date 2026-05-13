@@ -11,7 +11,10 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 
+import java.util.List;
 import java.util.UUID;
+
+import com.aiworkbench.companion.manager.CompanionRole;
 
 /**
  * 生命周期子命令：/companion status, revive, teleport, hide, come, down
@@ -66,7 +69,111 @@ public class CompanionLifecycleCommands {
                                                     StringArgumentType.getString(ctx, "stat"),
                                                     IntegerArgumentType.getInteger(ctx, "points"))))))
                         .then(Commands.literal("reset")
-                                .executes(ctx -> resetStats(ctx.getSource()))));
+                                .executes(ctx -> resetStats(ctx.getSource()))))
+                // Squad commands
+                .then(buildSquadCommands());
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> buildSquadCommands() {
+        var node = Commands.literal("squad");
+        node.executes(ctx -> squadStatus(ctx.getSource()));
+        node.then(Commands.literal("create")
+                .then(Commands.argument("role", StringArgumentType.word())
+                        .executes(ctx -> squadCreate(ctx.getSource(), StringArgumentType.getString(ctx, "role")))));
+        node.then(Commands.literal("dismiss")
+                .executes(ctx -> squadDismiss(ctx.getSource())));
+        node.then(Commands.literal("list")
+                .executes(ctx -> squadStatus(ctx.getSource())));
+        node.then(Commands.literal("switch")
+                .executes(ctx -> squadSwitch(ctx.getSource())));
+        return node;
+    }
+
+    // ==================== Squad Commands ====================
+
+    private static int squadStatus(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) return 0;
+        var squad = AICompanionMod.companionManager.getSquad(player.getUUID());
+        if (squad.isEmpty()) {
+            source.sendSuccess(() -> Component.literal("§7你没有同伴。使用 §e/companion squad create <角色> §7创建"), false);
+            return 1;
+        }
+        StringBuilder sb = new StringBuilder("§6👥 同伴小队 (" + squad.size() + "/" + com.aiworkbench.companion.manager.CompanionManager.MAX_COMPANIONS + ")\n");
+        for (var c : squad) {
+            String marker = AICompanionMod.companionManager.getCompanion(player.getUUID()) == c ? " §a◀" : "";
+            sb.append(String.format("§7  %s §fLv.%d §7%s%s\n", c.getRole().icon, c.getLevel(), c.getRole().chineseName, marker));
+        }
+        boolean canRecruit = AICompanionMod.companionManager.canRecruitNewCompanion(player.getUUID());
+        if (canRecruit && squad.size() < 3) {
+            sb.append("§a可以招募新同伴! 使用 §e/companion squad create <角色>");
+        } else if (!canRecruit && squad.size() < 3) {
+            sb.append("§7需要所有同伴满级(Lv." + com.aiworkbench.companion.entity.AutomatonEntity.MAX_LEVEL + ")才能招募下一个");
+        }
+        final String msg = sb.toString();
+        source.sendSuccess(() -> Component.literal(msg), false);
+        return 1;
+    }
+
+    private static int squadCreate(CommandSourceStack source, String roleName) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) return 0;
+
+        var manager = AICompanionMod.companionManager;
+        if (!manager.canRecruitNewCompanion(player.getUUID())) {
+            if (manager.squadSize(player.getUUID()) >= 3) {
+                source.sendFailure(Component.literal("§c已达最大同伴数量(3个)!"));
+            } else {
+                source.sendFailure(Component.literal("§c需要当前同伴满级(Lv." + com.aiworkbench.companion.entity.AutomatonEntity.MAX_LEVEL + ")才能招募新同伴!"));
+            }
+            return 0;
+        }
+
+        CompanionRole role;
+        try { role = CompanionRole.valueOf(roleName.toUpperCase()); }
+        catch (IllegalArgumentException e) {
+            source.sendFailure(Component.literal("§c未知角色: " + roleName + "。可用: miner/guard/farmer/builder/explorer/general"));
+            return 0;
+        }
+
+        ServerLevel level = player.serverLevel();
+        AutomatonEntity companion = AutomatonEntity.create(level, role.chineseName + "_companion", player);
+        companion.setRole(role);
+        if (!level.addFreshEntity(companion)) {
+            source.sendFailure(Component.literal("§c生成同伴失败!"));
+            return 0;
+        }
+        manager.addCompanion(player.getUUID(), companion);
+        companion.playSpawnParticles();
+        companion.showDialogue("§b" + role.icon + " " + role.chineseName + " 报到!", 80);
+        source.sendSuccess(() -> Component.literal("§a新同伴已招募: " + role.icon + " " + role.chineseName + " (" + manager.squadSize(player.getUUID()) + "/3)"), false);
+        return 1;
+    }
+
+    private static int squadDismiss(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) return 0;
+        AutomatonEntity active = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (active == null) {
+            source.sendFailure(Component.literal("§c没有可解散的同伴"));
+            return 0;
+        }
+        String name = active.getRole().chineseName;
+        AICompanionMod.companionManager.removeCompanionById(active.getUUID());
+        source.sendSuccess(() -> Component.literal("§e已解散: " + name), false);
+        return 1;
+    }
+
+    private static int squadSwitch(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) return 0;
+        AutomatonEntity next = AICompanionMod.companionManager.cycleActiveCompanion(player.getUUID());
+        if (next == null) {
+            source.sendFailure(Component.literal("§c没有可切换的同伴"));
+            return 0;
+        }
+        source.sendSuccess(() -> Component.literal("§a切换到: " + next.getRole().icon + " " + next.getRole().chineseName + " Lv." + next.getLevel()), false);
+        return 1;
     }
 
     /**

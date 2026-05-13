@@ -3,6 +3,8 @@ package com.aiworkbench.companion.entity;
 import com.aiworkbench.companion.AICompanionMod;
 import com.aiworkbench.companion.ai.PerceptionEngine;
 import com.aiworkbench.companion.ai.TaskQueue;
+import com.aiworkbench.companion.manager.CompanionManager;
+import com.aiworkbench.companion.manager.CompanionRole;
 import com.aiworkbench.companion.entity.goal.AutoUpgrader;
 import com.aiworkbench.companion.entity.goal.CompanionFollowGoal;
 import com.aiworkbench.companion.skill.AutoCurriculum;
@@ -238,6 +240,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     private volatile boolean skillActive = false;
 
     // ==================== AutoCurriculum / Autonomous Mode ====================
+    private CompanionRole companionRole = CompanionRole.GENERAL; // 同伴角色
     private boolean autonomousMode = false;          // 自主模式：true=同伴自己决定做什么
     private int curriculumTickCounter = 0;            // 课程评估计数器
     private static final int CURRICULUM_EVAL_INTERVAL = 600; // 每30秒评估一次（600 ticks）
@@ -314,7 +317,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     private int level = 1;
     private int xp = 0;
     private int xpToNext = 130; // XP needed for level 2 (50 + 1*80)
-    private static final int MAX_LEVEL = 100;
+    public static final int MAX_LEVEL = 100;
 
     // ==================== Constructor ====================
 
@@ -1887,6 +1890,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         if (tag.contains("PatrolMode") && tag.getBoolean("PatrolMode")) currentState = CompanionState.PATROL;
         if (tag.contains("FollowModeActive") && tag.getBoolean("FollowModeActive")) currentState = CompanionState.FOLLOW;
         if (tag.contains("AutonomousMode")) autonomousMode = tag.getBoolean("AutonomousMode");
+        if (tag.contains("CompanionRole")) companionRole = CompanionRole.valueOf(tag.getString("CompanionRole"));
 
         // Load persistent config state
         if (tag.contains("Hidden")) hidden = tag.getBoolean("Hidden");
@@ -1948,6 +1952,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         tag.putBoolean("PatrolMode", isPatrolModeEnabled());
         tag.putBoolean("FollowModeActive", isFollowModeActive());
         tag.putBoolean("AutonomousMode", autonomousMode);
+        tag.putString("CompanionRole", companionRole.name());
 
         // Save persistent config state
         tag.putBoolean("Hidden", hidden);
@@ -2622,6 +2627,54 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         this.entityData.set(DATA_LEVEL, level);
         this.entityData.set(DATA_XP, xp);
         this.entityData.set(DATA_XP_TO_NEXT, xpToNext);
+
+        // 满级时触发LLM介绍对话，提示可招募新同伴
+        if (level >= MAX_LEVEL) {
+            triggerMaxLevelRecruitDialogue();
+        }
+    }
+
+    /** 是否满级 */
+    public boolean isMaxLevel() { return level >= MAX_LEVEL; }
+
+    public CompanionRole getRole() { return companionRole; }
+    public void setRole(CompanionRole role) { this.companionRole = role; }
+
+    /** 满级时触发LLM对话，介绍招募新同伴的可能 */
+    private void triggerMaxLevelRecruitDialogue() {
+        int squadSize = AICompanionMod.companionManager.squadSize(getOwnerUUID());
+        if (squadSize >= CompanionManager.MAX_COMPANIONS) return; // 已满3个
+
+        String roleHint = switch (companionRole) {
+            case MINER -> "我是矿工，也许你需要一个守卫来保护我们？";
+            case GUARD -> "我是守卫，要不要招募一个矿工帮忙采集资源？";
+            case FARMER -> "我是农民，也许你需要一个探索者去开地图？";
+            case BUILDER -> "我是建筑师，要不要找个矿工帮忙采集建材？";
+            default -> "你可以招募不同角色的同伴组成小队！";
+        };
+        showDialogue("§d✨ 我已满级！" + roleHint + " §7[/companion squad create <角色>]", 200);
+
+        // 异步触发LLM生成更有趣的介绍对话
+        ServerPlayer owner = getOwner();
+        if (owner != null) {
+            java.util.concurrent.CompletableFuture.runAsync(() -> {
+                try {
+                    String model = com.aiworkbench.companion.CompanionConfig.getModel(owner.getUUID());
+                    String prompt = "你是Minecraft中的" + companionRole.chineseName + "同伴，你刚达到满级Lv." + MAX_LEVEL +
+                        "。请用一句话（15字以内）通知主人可以招募新同伴了。你有" + squadSize + "个同伴，最多" + CompanionManager.MAX_COMPANIONS + "个。";
+                    java.util.LinkedHashMap<String, Object> opts = new java.util.LinkedHashMap<>();
+                    opts.put("temperature", 0.8);
+                    opts.put("num_predict", 40);
+                    String response = com.aiworkbench.companion.ai.OllamaClient.chat(model, null, prompt, opts, 10000, 1);
+                    if (response != null && !response.isEmpty()) {
+                        final String msg = response.trim();
+                        if (getServer() != null) {
+                            getServer().execute(() -> showDialogue("§d💬 " + msg, 120));
+                        }
+                    }
+                } catch (Exception ignored) {}
+            });
+        }
     }
 
     /**

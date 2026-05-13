@@ -506,7 +506,13 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         // 9: Survival — nighttime lighting + shelter
         this.goalSelector.addGoal(9, new com.aiworkbench.companion.entity.goal.CompanionSurvivalGoal(this));
 
-        AICompanionMod.LOGGER.info("[AutomatonEntity] Goals registered: Float, Jump, Guard, Gather, Follow, Wander, Look, Random, Survival");
+        // 10: Fishing — auto-fish near water
+        this.goalSelector.addGoal(10, new com.aiworkbench.companion.entity.goal.CompanionFishingGoal(this));
+
+        // 11: Trading — auto-trade with villagers
+        this.goalSelector.addGoal(11, new com.aiworkbench.companion.entity.goal.CompanionTradeGoal(this));
+
+        AICompanionMod.LOGGER.info("[AutomatonEntity] Goals registered: Float, Jump, Guard, Gather, Farm, Follow, Wander, Look, Random, Survival, Fishing, Trade");
     }
 
     // ==================== Entity Behavior ====================

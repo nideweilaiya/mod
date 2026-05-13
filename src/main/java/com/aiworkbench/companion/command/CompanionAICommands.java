@@ -6,6 +6,8 @@ import com.aiworkbench.companion.ai.TaskInterruptProtocol;
 import com.aiworkbench.companion.ai.TaskInterruptProtocol.*;
 import com.aiworkbench.companion.ai.TaskQueue;
 import com.aiworkbench.companion.entity.AutomatonEntity;
+import com.aiworkbench.companion.skill.CompositeTask;
+import com.aiworkbench.companion.skill.GoalDecomposer;
 import com.aiworkbench.companion.skill.Skill;
 import com.aiworkbench.companion.skill.SkillGenerator;
 import com.aiworkbench.companion.skill.SkillLibrary;
@@ -156,7 +158,10 @@ public class CompanionAICommands {
                         .then(Commands.literal("clear")
                                 .executes(ctx -> clearQueue(ctx.getSource())))
                         .then(Commands.literal("list")
-                                .executes(ctx -> showQueue(ctx.getSource()))));
+                                .executes(ctx -> showQueue(ctx.getSource()))))
+                .then(Commands.literal("goal")
+                        .then(Commands.argument("description", StringArgumentType.greedyString())
+                                .executes(ctx -> setGoal(ctx.getSource(), StringArgumentType.getString(ctx, "description")))));
     }
 
     /**
@@ -627,6 +632,35 @@ public class CompanionAICommands {
 
         companion.getTaskQueue().clear();
         source.sendSuccess(() -> Component.literal("§a任务队列已清空"), false);
+        return 1;
+    }
+
+    // ==================== 目标分解命令 ====================
+
+    private static int setGoal(CommandSourceStack source, String description) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) return 0;
+
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("§c你没有同伴"));
+            return 0;
+        }
+
+        CompositeTask task = GoalDecomposer.decompose(description);
+        if (task == null) {
+            source.sendSuccess(() -> Component.literal("§c无法理解目标: " + description + "\n§7试试: 铁镐 / 钻石镐 / 铁甲全套 / 附魔台"), false);
+            return 0;
+        }
+
+        boolean ok = companion.getTaskQueue().enqueueComposite(task);
+        if (ok) {
+            String desc = GoalDecomposer.describeDecomposition(task);
+            source.sendSuccess(() -> Component.literal(desc), false);
+            companion.showDialogue("§b🎯 " + task.goalDescription, 80);
+        } else {
+            source.sendFailure(Component.literal("§c当前有任务在执行，请先完成或清空队列"));
+        }
         return 1;
     }
 

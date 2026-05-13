@@ -3,6 +3,7 @@ package com.aiworkbench.companion.ai;
 import com.aiworkbench.companion.AICompanionMod;
 import com.aiworkbench.companion.skill.AutoCurriculum;
 import com.aiworkbench.companion.skill.AutoCurriculum.CurriculumProposal;
+import com.aiworkbench.companion.skill.CompositeTask;
 import com.aiworkbench.companion.skill.Skill;
 import com.aiworkbench.companion.entity.AutomatonEntity;
 
@@ -39,6 +40,10 @@ public class TaskQueue {
     private TaskEntry current;
     /** 被挂起的任务（等待恢复） */
     private TaskEntry suspended;
+    /** 当前正在执行的复合任务（多步骤目标） */
+    private CompositeTask compositeTask;
+    /** 上一 tick 的技能活跃状态（用于检测技能完成） */
+    private boolean wasSkillActive = false;
     /** 冷却中的技能 → 冷却结束tick */
     private final Map<String, Long> cooldowns = new HashMap<>();
     /** 技能连续失败计数 */
@@ -95,12 +100,27 @@ public class TaskQueue {
      * 每 tick 由 AutomatonEntity 调用。驱动任务执行和状态推进。
      */
     public void tick(AutomatonEntity entity) {
-        // 实体正在执行 SkillEngine 的技能 → 不干预
-        if (entity.isSkillActive()) {
-            return;
+        boolean skillActive = entity.isSkillActive();
+
+        // 检测技能刚完成：wasSkillActive=true, skillActive=false
+        if (wasSkillActive && !skillActive && current != null && current.status == TaskStatus.RUNNING) {
+            // 技能执行完毕 → 标记当前任务完成
+            if (current.isCompositeStep) {
+                current.completed = true;
+                completeCurrent();
+                // 推进复合任务到下一步
+                if (compositeTask != null && !compositeTask.isDone()) {
+                    onCompositeStepDone(entity);
+                }
+            }
         }
 
-        // 当前任务完成/失败 → 推进到下一个
+        wasSkillActive = skillActive;
+
+        // 实体正在执行技能 → 等待
+        if (skillActive) return;
+
+        // 当前任务完成（非复合任务或已处理）→ 取下一个
         if (current != null && current.status == TaskStatus.RUNNING && current.completed) {
             completeCurrent();
         }
@@ -145,7 +165,6 @@ public class TaskQueue {
     /** 执行一个任务条目：查找技能并启动 SkillEngine */
     private void executeEntry(TaskEntry entry, AutomatonEntity entity) {
         if (entry.skillName == null || entry.skillName.isEmpty()) {
-            // 无技能名（纯消息任务） → 直接标记完成
             entry.completed = true;
             return;
         }
@@ -162,13 +181,17 @@ public class TaskQueue {
             entity.getSkillEngine().startSkill(skill, entity);
             entity.showDialogue("§a🔧 " + entry.description, 60);
             AICompanionMod.LOGGER.info("[TaskQueue] Started: {}", entry);
+            // 复合任务步骤不立即标记完成，等待 tick 检测技能结束
+            if (!entry.isCompositeStep) {
+                entry.completed = true;
+            }
         } else {
-            // 技能未注册 → 尝试 fallback 到采集模式
+            // 技能未注册 → fallback
             if (entry.skillName.startsWith("mine") || entry.skillName.contains("Wood") || entry.skillName.contains("collect")) {
                 entity.setGatherModeEnabled(true);
                 entity.showDialogue("§a🔧" + entry.description, 60);
             }
-            entry.completed = true; // 标记完成，不阻塞队列
+            entry.completed = true;
         }
     }
 
@@ -224,10 +247,90 @@ public class TaskQueue {
     public boolean isEmpty() { return size() == 0; }
     public boolean hasSuspended() { return suspended != null; }
 
-    /** 清空队列（保留当前任务） */
+    // ==================== 复合任务 ====================
+
+    /**
+     * 将复合任务入队。复合任务的每个子步骤作为独立任务逐一执行。
+     */
+    public boolean enqueueComposite(CompositeTask task) {
+        if (compositeTask != null && !compositeTask.isDone()) {
+            return false;
+        }
+        compositeTask = task;
+        compositeTask.start();
+        AICompanionMod.LOGGER.info("[TaskQueue] Composite started: {}", task.getProgressString());
+        // 将第一个子步骤作为 current 任务
+        startNextCompositeSubTask();
+        return true;
+    }
+
+    /** 启动复合任务的下一个子步骤 */
+    private void startNextCompositeSubTask() {
+        if (compositeTask == null || compositeTask.isDone()) return;
+        CompositeTask.SubTask sub = compositeTask.currentSubTask();
+        if (sub != null) {
+            TaskEntry entry = new TaskEntry(sub.skillName, sub.description);
+            entry.priorityValue = TaskPriority.HIGH.baseValue;
+            current = entry;
+            current.status = TaskStatus.RUNNING;
+        }
+    }
+
+    /** 复合任务子步骤完成后的处理 */
+    private void onCompositeStepDone(AutomatonEntity entity) {
+        if (compositeTask == null || compositeTask.isDone()) return;
+        CompositeTask.SubTask next = compositeTask.advance();
+        if (compositeTask.isDone()) {
+            AICompanionMod.LOGGER.info("[TaskQueue] Composite done: {}", compositeTask.getProgressString());
+            if (entity != null) {
+                entity.showDialogue("§a✅ " + compositeTask.goalDescription + " 完成!", 80);
+            }
+            compositeTask = null;
+            current = null;
+            return;
+        }
+        if (next != null) {
+            TaskEntry entry = new TaskEntry(next.skillName, next.description);
+            entry.priorityValue = TaskPriority.HIGH.baseValue;
+            current = entry;
+            current.status = TaskStatus.RUNNING;
+            current.startedAt = entity != null ? entity.level().getGameTime() : 0;
+        }
+    }
+
+    /** 处理复合任务子步骤失败 */
+    private void onCompositeStepFail(AutomatonEntity entity) {
+        if (compositeTask == null) return;
+        CompositeTask.FailureAction action = compositeTask.onFail();
+        switch (action) {
+            case RETRY_STEP -> startNextCompositeSubTask();
+            case SKIP_STEP -> {
+                AICompanionMod.LOGGER.warn("[TaskQueue] Composite skipped: {}", compositeTask.currentSubTask());
+                compositeTask.advance();
+                onCompositeStepDone(entity);
+            }
+            case ABORT_TASK -> {
+                AICompanionMod.LOGGER.error("[TaskQueue] Composite aborted: {}", compositeTask.goalDescription);
+                compositeTask.abort();
+                compositeTask = null;
+                current = null;
+                if (entity != null) entity.showDialogue("§c❌ 任务链中断", 60);
+            }
+        }
+    }
+
+    public boolean hasCompositeTask() {
+        return compositeTask != null && !compositeTask.isDone();
+    }
+
+    public String getCompositeProgress() {
+        return compositeTask != null ? compositeTask.getProgressString() : null;
+    }
+
     public void clear() {
         queue.clear();
         suspended = null;
+        compositeTask = null;
     }
 
     /** 获取排队中的任务描述列表（用于 HUD/命令显示） */
@@ -285,6 +388,7 @@ public class TaskQueue {
         public boolean completed;
         public long startedAt;
         public final long estimatedTicks;
+        public boolean isCompositeStep; // 是否属于复合任务的一个步骤
 
         TaskEntry(CurriculumProposal proposal) {
             this.description = proposal.taskDescription;
@@ -292,7 +396,15 @@ public class TaskQueue {
             this.priorityValue = proposal.isHighPriority() ? TaskPriority.HIGH.baseValue :
                 proposal.priority == AutoCurriculum.Priority.MEDIUM ? TaskPriority.MEDIUM.baseValue :
                 TaskPriority.LOW.baseValue;
-            this.estimatedTicks = 200; // 默认预估 10s
+            this.estimatedTicks = 200;
+        }
+
+        TaskEntry(String skillName, String description) {
+            this.description = description;
+            this.skillName = skillName;
+            this.priorityValue = TaskPriority.HIGH.baseValue;
+            this.estimatedTicks = 200;
+            this.isCompositeStep = true;
         }
 
         @Override

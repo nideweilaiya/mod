@@ -1,6 +1,8 @@
 package com.aiworkbench.companion.skill;
 
 import com.aiworkbench.companion.AICompanionMod;
+import com.aiworkbench.companion.building.BlueprintLibrary;
+import com.aiworkbench.companion.building.BuildingBlueprint;
 import com.aiworkbench.companion.entity.AutomatonEntity;
 import com.aiworkbench.companion.skill.atomic.*;
 import net.minecraft.core.BlockPos;
@@ -299,8 +301,9 @@ public final class PresetSkillRegistry {
      * 建造小屋：在当前位置建一个 3×3 简易小屋（用圆石）。
      */
     private static void registerBuildShelter(SkillLibrary library) {
+        BuildingBlueprint hut = BlueprintLibrary.get("hut_3x3");
         SkillAction action = new SkillAction(List.of(
-            new BuildStructureAction(BuildStructureAction.HUT_3x3, Blocks.COBBLESTONE)
+            new BuildStructureAction(hut)
         ), false);
 
         Skill skill = new Skill(

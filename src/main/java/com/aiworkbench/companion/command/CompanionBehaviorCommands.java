@@ -4,6 +4,8 @@ import com.aiworkbench.companion.AICompanionMod;
 import com.aiworkbench.companion.entity.AutomatonEntity;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import java.util.List;
+
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
@@ -56,7 +58,54 @@ public class CompanionBehaviorCommands {
                         .then(Commands.literal("upgrade")
                                 .executes(ctx -> testUpgrade(ctx.getSource())))
                         .then(Commands.literal("gather")
-                                .executes(ctx -> testGather(ctx.getSource()))));
+                                .executes(ctx -> testGather(ctx.getSource()))))
+                .then(Commands.literal("build")
+                        .then(Commands.argument("blueprint", StringArgumentType.greedyString())
+                                .executes(ctx -> startBuild(ctx.getSource(), StringArgumentType.getString(ctx, "blueprint"))))
+                        .executes(ctx -> listBlueprints(ctx.getSource())));
+    }
+
+    // ==================== 建造命令 ====================
+
+    private static int startBuild(CommandSourceStack source, String blueprintName) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) return 0;
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("§c你没有同伴"));
+            return 0;
+        }
+
+        com.aiworkbench.companion.building.BuildingBlueprint bp =
+            com.aiworkbench.companion.building.BlueprintLibrary.get(blueprintName);
+        if (bp == null) {
+            source.sendSuccess(() -> Component.literal("§c找不到蓝图: " + blueprintName +
+                "\n§7可用: " + String.join(", ", com.aiworkbench.companion.building.BlueprintLibrary.getNames())), false);
+            return 0;
+        }
+
+        var missing = com.aiworkbench.companion.building.MaterialGatherer.checkMissing(companion, bp);
+        if (!missing.isEmpty()) {
+            String desc = com.aiworkbench.companion.building.MaterialGatherer.describeMissing(missing);
+            source.sendSuccess(() -> Component.literal(desc + "\n§7预计需 " + bp.totalBlocks() + " 个方块"), false);
+        }
+
+        var action = new com.aiworkbench.companion.skill.atomic.BuildStructureAction(bp);
+        com.aiworkbench.companion.skill.SkillAction skillAction =
+            new com.aiworkbench.companion.skill.SkillAction(List.of(action), false);
+        com.aiworkbench.companion.skill.Skill skill = new com.aiworkbench.companion.skill.Skill(
+            "build_" + bp.name, "建造" + bp.name, List.of(), skillAction,
+            com.aiworkbench.companion.skill.SkillCategory.INTERACTION, false);
+        companion.getSkillEngine().startSkill(skill, companion);
+        companion.showDialogue("§6🏗 建造: " + bp.name, 80);
+        source.sendSuccess(() -> Component.literal("§a开始建造 §6" + bp.name + " §7(" + bp.totalBlocks() + "块)"), false);
+        return 1;
+    }
+
+    private static int listBlueprints(CommandSourceStack source) {
+        var names = com.aiworkbench.companion.building.BlueprintLibrary.listAll();
+        source.sendSuccess(() -> Component.literal("§6🏗 可用蓝图:\n§7" + String.join("\n§7", names)), false);
+        return 1;
     }
 
     private static int toggleGuard(CommandSourceStack source) {

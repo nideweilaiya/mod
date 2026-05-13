@@ -1,6 +1,9 @@
 package com.aiworkbench.companion.entity;
 
 import com.aiworkbench.companion.AICompanionMod;
+import com.aiworkbench.companion.ai.DialogueStack;
+import com.aiworkbench.companion.ai.DialogueStack.PendingMessage;
+import com.aiworkbench.companion.ai.DialogueStack.MessagePriority;
 import com.aiworkbench.companion.ai.PerceptionEngine;
 import com.aiworkbench.companion.ai.TaskQueue;
 import com.aiworkbench.companion.manager.CompanionManager;
@@ -244,8 +247,9 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     private boolean autonomousMode = false;          // 自主模式：true=同伴自己决定做什么
     private int curriculumTickCounter = 0;            // 课程评估计数器
     private static final int CURRICULUM_EVAL_INTERVAL = 600; // 每30秒评估一次（600 ticks）
-    private CurriculumProposal pendingProposal = null; // 当前待处理的课程提议（手动模式）
+    private CurriculumProposal pendingProposal = null; // 当前待处理的课程提议（手动模式，兼容旧逻辑）
     private final TaskQueue taskQueue = new TaskQueue(); // 任务队列（自主模式）
+    private final DialogueStack dialogueStack = new DialogueStack(); // 对话消息栈
 
     // ==================== Valuable Items (Pickup Filter) ====================
 
@@ -888,6 +892,10 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         // 驱动任务队列 — 每 tick 推进当前任务、处理超时、提升等待优先级
         if (!this.level().isClientSide && isAlive() && getOwner() != null) {
             taskQueue.tick(this);
+            // 每 5 秒清理过期消息
+            if (tickCount % 100 == 0) {
+                dialogueStack.expireStale();
+            }
         }
 
         // AutoCurriculum evaluation — 仅在非战斗、非技能执行时评估（服务端）
@@ -3063,8 +3071,16 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         } else {
             CurriculumProposal proposal = AutoCurriculum.proposeNextTask(this);
             if (proposal == null) return;
-            String msg = "\u00a7e💡 " + proposal.taskDescription + " \u00a77[/companion confirm]";
-            showDialogue(msg, 120); // 6秒
+            String category = proposal.suggestedSkill != null ? proposal.suggestedSkill : "general";
+            MessagePriority mp = proposal.isHighPriority() ? MessagePriority.HIGH : MessagePriority.NORMAL;
+            dialogueStack.push(new PendingMessage(
+                "curriculum_" + System.currentTimeMillis(),
+                proposal.taskDescription,
+                category, mp, proposal.suggestedSkill,
+                extractKeywords(proposal.taskDescription)
+            ));
+            String msg = "§e" + "💡 " + proposal.taskDescription + " §7[/companion confirm]";
+            showDialogue(msg, 120);
             this.pendingProposal = proposal;
         }
     }
@@ -3110,8 +3126,22 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         return pendingProposal;
     }
 
-    /** 获取任务队列（供外部查询和命令使用） */
+    /** 获取对话消息栈 */
+    public DialogueStack getDialogueStack() { return dialogueStack; }
+    /** 获取任务队列 */
     public TaskQueue getTaskQueue() { return taskQueue; }
+    /** 从文本中提取匹配关键词 */
+    private static String[] extractKeywords(String text) {
+        if (text == null || text.isEmpty()) return new String[0];
+        java.util.List<String> k = new java.util.ArrayList<>();
+        String l = text.toLowerCase();
+        if (l.contains("矿") || l.contains("ore")) k.add("矿");
+        if (l.contains("树") || l.contains("木") || l.contains("wood")) k.add("树");
+        if (l.contains("战") || l.contains("敌") || l.contains("mob")) k.add("战");
+        if (l.contains("建") || l.contains("build")) k.add("建");
+        if (l.contains("回") || l.contains("跟") || l.contains("follow")) k.add("回");
+        return k.toArray(new String[0]);
+    }
 
     /**
      * 获取当前待处理提议或队列状态的文本描述（用于GUI显示）。

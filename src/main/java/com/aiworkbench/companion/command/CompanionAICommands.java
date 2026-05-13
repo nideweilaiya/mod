@@ -188,6 +188,22 @@ public class CompanionAICommands {
 
         UUID playerUUID = player.getUUID();
 
+        // ===== 消息栈匹配：玩家自然语言回应待处理提议 =====
+        com.aiworkbench.companion.ai.DialogueStack.PendingMessage matched =
+            companion.getDialogueStack().matchAndPop(message);
+        if (matched != null) {
+            if ("rejected".equals(matched.response)) {
+                source.sendSuccess(() -> Component.literal("§7已忽略: " + matched.text), false);
+                companion.showDialogue("§7好的", 40);
+                return 1;
+            }
+            source.sendSuccess(() -> Component.literal("§a确认: " + matched.text), false);
+            if (matched.linkedSkill != null && !matched.linkedSkill.isEmpty()) {
+                executePresetSkill(player, companion, playerUUID, matched.linkedSkill);
+            }
+            return 1;
+        }
+
         // ===== 协商状态处理 =====
         if (pendingNegotiations.containsKey(playerUUID)) {
             Boolean confirmed = TaskInterruptProtocol.isConfirmation(message);

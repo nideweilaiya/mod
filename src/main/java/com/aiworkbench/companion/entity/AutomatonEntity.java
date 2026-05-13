@@ -2050,6 +2050,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
 
     // ==================== Follow Mode Toggle (F Key) ====================
 
+    public void setPreCombatState(CompanionState state) { this.preCombatState = state; }
     @Deprecated public String getPreCombatMode() { return preCombatState.name().toLowerCase(); }
     @Deprecated public void setPreCombatMode(String mode) {
         preCombatState = switch (mode) {

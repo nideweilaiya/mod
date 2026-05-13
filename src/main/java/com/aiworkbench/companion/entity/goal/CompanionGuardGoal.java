@@ -2,6 +2,7 @@ package com.aiworkbench.companion.entity.goal;
 
 import com.aiworkbench.companion.AICompanionMod;
 import com.aiworkbench.companion.entity.AutomatonEntity;
+import com.aiworkbench.companion.entity.AutomatonEntity.CompanionState;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.world.InteractionHand;
@@ -109,7 +110,7 @@ public class CompanionGuardGoal extends Goal {
         companion.setGuardModeEnabled(false);
         // Restore the mode that was active before combat interrupted
         var previous = companion.getPreCombatState();
-        companion.setPreCombatMode("follow"); // reset to default
+        companion.setPreCombatState(CompanionState.FOLLOW);
         switch (previous) {
             case GATHER -> {
                 companion.setGatherModeEnabled(true);

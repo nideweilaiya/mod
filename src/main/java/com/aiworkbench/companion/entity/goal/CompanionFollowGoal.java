@@ -1,6 +1,7 @@
 package com.aiworkbench.companion.entity.goal;
 
 import com.aiworkbench.companion.entity.AutomatonEntity;
+import com.aiworkbench.companion.entity.AutomatonEntity.CompanionState;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.LivingEntity;
@@ -19,7 +20,6 @@ public class CompanionFollowGoal extends Goal {
     private final float minDistance;
     private PathNavigation navigation;
     private int ticksSinceMove = 0;
-    private boolean enabled = true;  // toggled via TCP follow command
 
     // Speed passed to PathNavigation.moveTo()
     // Note: PathNavigation multiplies this by entity's MOVEMENT_SPEED attribute (0.25)
@@ -43,12 +43,12 @@ public class CompanionFollowGoal extends Goal {
     public boolean canUse() {
         if (companion.isSkillActive()) return false;
         if (!companion.isFollowModeActive()) return false;
-        return enabled && companion.getOwnerUUID() != null && getOwner() != null;
+        return companion.getOwnerUUID() != null && getOwner() != null;
     }
 
     @Override
     public boolean canContinueToUse() {
-        return enabled && companion.isFollowModeActive() && companion.getOwnerUUID() != null && getOwner() != null;
+        return companion.isFollowModeActive() && companion.getOwnerUUID() != null && getOwner() != null;
     }
 
     @Override
@@ -120,17 +120,15 @@ public class CompanionFollowGoal extends Goal {
         return owner;
     }
 
-    /**
-     * Enable or disable the follow goal (used by TCP follow command)
-     */
     public void setEnabled(boolean enabled) {
-        this.enabled = enabled;
-        if (!enabled) {
-            companion.getNavigation().stop();
+        if (enabled) {
+            companion.transitionTo(CompanionState.FOLLOW);
+        } else if (companion.getState() == CompanionState.FOLLOW) {
+            companion.transitionTo(CompanionState.IDLE);
         }
     }
 
     public boolean isEnabled() {
-        return enabled;
+        return companion.getState() == CompanionState.FOLLOW;
     }
 }

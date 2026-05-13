@@ -8,6 +8,7 @@ import com.aiworkbench.companion.ai.PerceptionEngine;
 import com.aiworkbench.companion.ai.TaskQueue;
 import com.aiworkbench.companion.manager.CompanionManager;
 import com.aiworkbench.companion.manager.CompanionRole;
+import com.aiworkbench.companion.personality.CompanionPersonality;
 import com.aiworkbench.companion.entity.goal.AutoUpgrader;
 import com.aiworkbench.companion.entity.goal.CompanionFollowGoal;
 import com.aiworkbench.companion.skill.AutoCurriculum;
@@ -243,8 +244,9 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     private volatile boolean skillActive = false;
 
     // ==================== AutoCurriculum / Autonomous Mode ====================
-    private CompanionRole companionRole = CompanionRole.GENERAL; // 同伴角色
-    private boolean autonomousMode = false;          // 自主模式：true=同伴自己决定做什么
+    private CompanionRole companionRole = CompanionRole.GENERAL;
+    private CompanionPersonality personality = new CompanionPersonality();
+    private boolean autonomousMode = false;
     private int curriculumTickCounter = 0;            // 课程评估计数器
     private static final int CURRICULUM_EVAL_INTERVAL = 600; // 每30秒评估一次（600 ticks）
     private CurriculumProposal pendingProposal = null; // 当前待处理的课程提议（手动模式，兼容旧逻辑）
@@ -1905,6 +1907,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         if (tag.contains("FollowModeActive") && tag.getBoolean("FollowModeActive")) currentState = CompanionState.FOLLOW;
         if (tag.contains("AutonomousMode")) autonomousMode = tag.getBoolean("AutonomousMode");
         if (tag.contains("CompanionRole")) companionRole = CompanionRole.valueOf(tag.getString("CompanionRole"));
+        if (tag.contains("personality")) personality = CompanionPersonality.fromNBT(tag.getCompound("personality"));
 
         // Load persistent config state
         if (tag.contains("Hidden")) hidden = tag.getBoolean("Hidden");
@@ -1967,6 +1970,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         tag.putBoolean("FollowModeActive", isFollowModeActive());
         tag.putBoolean("AutonomousMode", autonomousMode);
         tag.putString("CompanionRole", companionRole.name());
+        tag.put("personality", personality.toNBT());
 
         // Save persistent config state
         tag.putBoolean("Hidden", hidden);
@@ -2653,6 +2657,8 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
 
     public CompanionRole getRole() { return companionRole; }
     public void setRole(CompanionRole role) { this.companionRole = role; }
+    public CompanionPersonality getPersonality() { return personality; }
+    public void setPersonality(CompanionPersonality p) { this.personality = p; }
 
     /** 满级时触发LLM对话，介绍招募新同伴的可能 */
     private void triggerMaxLevelRecruitDialogue() {

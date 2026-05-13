@@ -27,10 +27,17 @@ public class CompanionAI {
     private final Map<String, Object> companionState = new HashMap<>();
 
     // Companion personality description
-    private static final String PERSONALITY = "你是一只忠诚又活泼的AI同伴，陪伴主人在《我的世界》中冒险。"
-        + "你性格开朗、乐于助人，说话简洁活泼，偶尔会开个小玩笑。"
-        + "你喜欢夸赞主人，也喜欢分享你对这个方块世界的发现。"
-        + "每次回复控制在20字以内，用中文，不要用表情符号。";
+    private static final String DEFAULT_PERSONALITY = "你是一只忠诚又活泼的AI同伴，陪伴主人在《我的世界》中冒险。"
+        + "你性格开朗、乐于助人，说话简洁活泼。"
+        + "每次回复控制在20字以内，用中文。";
+
+    /** 根据同伴性格档案构建个性化的系统提示词 */
+    public static String buildPersonalityPrompt(com.aiworkbench.companion.personality.CompanionPersonality p) {
+        if (p == null || !p.isGenerated) return DEFAULT_PERSONALITY;
+        return String.format(
+            "你是主人的Minecraft AI同伴。%s。说话风格：%s。回复控制在20字以内，用中文。",
+            p.describeTraits(), p.speechStyle);
+    }
 
     // Skill list that the AI can invoke
     private static final String SKILL_INSTRUCTIONS =
@@ -179,7 +186,7 @@ public class CompanionAI {
 
     private String buildEventPrompt(String eventType, java.util.Map<String, Object> eventContext) {
         StringBuilder sb = new StringBuilder();
-        sb.append(PERSONALITY).append("\n");
+        sb.append(DEFAULT_PERSONALITY).append("\n");
         sb.append("你的主人是 ").append(ownerName).append("。\n");
         sb.append("当前情境：").append(formatContext()).append("\n");
 
@@ -216,7 +223,7 @@ public class CompanionAI {
 
     private String buildPrompt(String playerMessage) {
         StringBuilder sb = new StringBuilder();
-        sb.append(PERSONALITY).append("\n");
+        sb.append(DEFAULT_PERSONALITY).append("\n");
         sb.append("你的主人是 ").append(ownerName).append("。\n");
         sb.append("当前情境：").append(formatContext()).append("\n");
         sb.append("\n对话历史：\n");
@@ -230,7 +237,7 @@ public class CompanionAI {
 
     private String buildSpontaneousPrompt() {
         StringBuilder sb = new StringBuilder();
-        sb.append(PERSONALITY).append("\n");
+        sb.append(DEFAULT_PERSONALITY).append("\n");
         sb.append("你的主人是 ").append(ownerName).append("。\n");
         sb.append("当前情境：").append(formatContext()).append("\n");
 
@@ -294,7 +301,7 @@ public class CompanionAI {
         if (AICompanionMod.memoryManager != null) {
             memoryCtx = AICompanionMod.memoryManager.getMemoryContext(companionId);
         }
-        String systemMsg = PERSONALITY + "\n"
+        String systemMsg = DEFAULT_PERSONALITY + "\n"
             + "你的主人是 " + ownerName + "。\n"
             + "当前情境：" + formatContext() + "\n";
         if (!memoryCtx.isEmpty()) {

@@ -6,6 +6,7 @@ import com.aiworkbench.companion.ai.TaskInterruptProtocol;
 import com.aiworkbench.companion.ai.TaskInterruptProtocol.*;
 import com.aiworkbench.companion.ai.TaskQueue;
 import com.aiworkbench.companion.entity.AutomatonEntity;
+import com.aiworkbench.companion.personality.PersonalityGenerator;
 import com.aiworkbench.companion.skill.CompositeTask;
 import com.aiworkbench.companion.skill.GoalDecomposer;
 import com.aiworkbench.companion.skill.Skill;
@@ -161,7 +162,10 @@ public class CompanionAICommands {
                                 .executes(ctx -> showQueue(ctx.getSource()))))
                 .then(Commands.literal("goal")
                         .then(Commands.argument("description", StringArgumentType.greedyString())
-                                .executes(ctx -> setGoal(ctx.getSource(), StringArgumentType.getString(ctx, "description")))));
+                                .executes(ctx -> setGoal(ctx.getSource(), StringArgumentType.getString(ctx, "description")))))
+                .then(Commands.literal("describe")
+                        .then(Commands.argument("description", StringArgumentType.greedyString())
+                                .executes(ctx -> describeCompanion(ctx.getSource(), StringArgumentType.getString(ctx, "description")))));
     }
 
     /**
@@ -611,6 +615,34 @@ public class CompanionAICommands {
         companion.showDialogue("主人，" + skillName + "完成了！还要继续吗？", 80);
         player.sendSystemMessage(Component.literal("§a✅ 技能 " + skillName + " 完成！"));
         player.sendSystemMessage(Component.literal("§7直接发送新任务或回复\"不用\""));
+    }
+
+    // ==================== 同伴描述命令 ====================
+
+    private static int describeCompanion(CommandSourceStack source, String description) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) return 0;
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("§c你没有同伴"));
+            return 0;
+        }
+
+        source.sendSuccess(() -> Component.literal("§d正在分析你的描述，生成性格档案..."), false);
+        AICompanionMod.LOGGER.info("[Describe] Generating personality from: {}", description);
+
+        PersonalityGenerator.generateAsync(player, description, personality -> {
+            if (companion.getServer() != null) {
+                companion.getServer().execute(() -> {
+                    companion.setPersonality(personality);
+                    String label = personality.shortLabel();
+                    companion.showDialogue("§d✨ 我是" + label + "型同伴！" +
+                        "(" + personality.describeTraits() + ")", 120);
+                    AICompanionMod.LOGGER.info("[Describe] Personality set: {}", personality);
+                });
+            }
+        });
+        return 1;
     }
 
     // ==================== 任务队列命令 ====================

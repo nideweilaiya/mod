@@ -139,6 +139,14 @@ public class CompanionHUDOverlay {
             };
             graphics.drawString(mc.font, modeDisplay, textX, textY, 0xFFFFFF, false);
 
+            // Personality label (if generated)
+            var pers = companion.getPersonality();
+            if (pers != null && pers.isGenerated) {
+                String pLabel = pers.shortLabel();
+                int pWidth = mc.font.width(pLabel);
+                graphics.drawString(mc.font, "§d" + pLabel, textX + 60, textY, 0xFFAAFF, false);
+            }
+
             // Line 4: Current action (what is companion targeting)
             textY += LINE_HEIGHT;
             String action = companion.getActionText();

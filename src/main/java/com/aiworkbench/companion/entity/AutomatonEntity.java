@@ -2,6 +2,7 @@ package com.aiworkbench.companion.entity;
 
 import com.aiworkbench.companion.AICompanionMod;
 import com.aiworkbench.companion.ai.PerceptionEngine;
+import com.aiworkbench.companion.ai.TaskQueue;
 import com.aiworkbench.companion.entity.goal.AutoUpgrader;
 import com.aiworkbench.companion.entity.goal.CompanionFollowGoal;
 import com.aiworkbench.companion.skill.AutoCurriculum;
@@ -39,6 +40,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -239,7 +241,8 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     private boolean autonomousMode = false;          // 自主模式：true=同伴自己决定做什么
     private int curriculumTickCounter = 0;            // 课程评估计数器
     private static final int CURRICULUM_EVAL_INTERVAL = 600; // 每30秒评估一次（600 ticks）
-    private CurriculumProposal pendingProposal = null; // 当前待处理的课程提议
+    private CurriculumProposal pendingProposal = null; // 当前待处理的课程提议（手动模式）
+    private final TaskQueue taskQueue = new TaskQueue(); // 任务队列（自主模式）
 
     // ==================== Valuable Items (Pickup Filter) ====================
 
@@ -873,6 +876,11 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             updatePersistentName();
         }
 
+        // 驱动任务队列 — 每 tick 推进当前任务、处理超时、提升等待优先级
+        if (!this.level().isClientSide && isAlive() && getOwner() != null) {
+            taskQueue.tick(this);
+        }
+
         // AutoCurriculum evaluation — 仅在非战斗、非技能执行时评估（服务端）
         if (!this.level().isClientSide && !isSkillActive() && isAlive() && getOwner() != null) {
             curriculumTickCounter++;
@@ -965,7 +973,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         });
     }
 
-    private int getUsedInventorySlots() {
+    public int getUsedInventorySlots() {
         int used = 0;
         for (int i = 0; i < getInventorySize(); i++) {
             if (!getItem(i).isEmpty()) used++;
@@ -2983,14 +2991,19 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     /**
      * 评估环境并生成课程提议。     * 自主模式下直接执行，手动模式下显示提议等待玩家确认。     */
     private void evaluateCurriculum() {
-        CurriculumProposal proposal = AutoCurriculum.proposeNextTask(this);
-        if (proposal == null) return;
-
         if (autonomousMode) {
-            // 自主模式：直接执行
-            executeCurriculumProposal(proposal);
+            java.util.List<CurriculumProposal> proposals = AutoCurriculum.proposeQueue(this);
+            if (proposals.isEmpty()) return;
+            int enqueued = 0;
+            for (CurriculumProposal p : proposals) {
+                if (taskQueue.enqueue(p)) enqueued++;
+            }
+            if (enqueued > 0) {
+                AICompanionMod.LOGGER.info("[AutoCurriculum] Enqueued {} proposals", enqueued);
+            }
         } else {
-            // 手动模式：头顶显示提议，等待玩家确认
+            CurriculumProposal proposal = AutoCurriculum.proposeNextTask(this);
+            if (proposal == null) return;
             String msg = "\u00a7e💡 " + proposal.taskDescription + " \u00a77[/companion confirm]";
             showDialogue(msg, 120); // 6秒
             this.pendingProposal = proposal;
@@ -3038,10 +3051,17 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         return pendingProposal;
     }
 
+    /** 获取任务队列（供外部查询和命令使用） */
+    public TaskQueue getTaskQueue() { return taskQueue; }
+
     /**
-     * 获取当前待处理提议的文本描述（用于GUI 显示））。
+     * 获取当前待处理提议或队列状态的文本描述（用于GUI显示）。
      */
     public String getPendingProposalText() {
+        if (!taskQueue.isEmpty()) {
+            List<String> descs = taskQueue.getQueueDescriptions();
+            return String.join("\n", descs);
+        }
         return pendingProposal != null ? pendingProposal.taskDescription : null;
     }
 

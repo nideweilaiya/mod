@@ -26,6 +26,8 @@ public class TaskInterruptProtocol {
         EXECUTE,          // 直接执行
         REPLY_ONLY,       // 回复但不中断
         FORCE_INTERRUPT,  // 强制中断
+        SUSPEND,          // 挂起当前任务（稍后可恢复）
+        RESUME,           // 恢复被挂起的任务
         NEGOTIATE,        // 协商（问玩家是否切换）
         FOLLOW_UP         // 任务完成，主动询问后续
     }

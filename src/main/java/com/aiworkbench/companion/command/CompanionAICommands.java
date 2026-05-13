@@ -4,6 +4,7 @@ import com.aiworkbench.companion.AICompanionMod;
 import com.aiworkbench.companion.CompanionConfig;
 import com.aiworkbench.companion.ai.TaskInterruptProtocol;
 import com.aiworkbench.companion.ai.TaskInterruptProtocol.*;
+import com.aiworkbench.companion.ai.TaskQueue;
 import com.aiworkbench.companion.entity.AutomatonEntity;
 import com.aiworkbench.companion.skill.Skill;
 import com.aiworkbench.companion.skill.SkillGenerator;
@@ -149,7 +150,13 @@ public class CompanionAICommands {
                         .then(Commands.literal("clear")
                                 .executes(ctx -> clearChat(ctx.getSource()))))
                 .then(Commands.literal("gui")
-                        .executes(ctx -> openGUI(ctx.getSource())));
+                        .executes(ctx -> openGUI(ctx.getSource())))
+                .then(Commands.literal("queue")
+                        .executes(ctx -> showQueue(ctx.getSource()))
+                        .then(Commands.literal("clear")
+                                .executes(ctx -> clearQueue(ctx.getSource())))
+                        .then(Commands.literal("list")
+                                .executes(ctx -> showQueue(ctx.getSource()))));
     }
 
     /**
@@ -583,6 +590,44 @@ public class CompanionAICommands {
         companion.showDialogue("主人，" + skillName + "完成了！还要继续吗？", 80);
         player.sendSystemMessage(Component.literal("§a✅ 技能 " + skillName + " 完成！"));
         player.sendSystemMessage(Component.literal("§7直接发送新任务或回复\"不用\""));
+    }
+
+    // ==================== 任务队列命令 ====================
+
+    private static int showQueue(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) return 0;
+
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("§c你没有同伴"));
+            return 0;
+        }
+
+        TaskQueue queue = companion.getTaskQueue();
+        if (queue.isEmpty()) {
+            source.sendSuccess(() -> Component.literal("§7任务队列为空"), false);
+            return 1;
+        }
+
+        java.util.List<String> descs = queue.getQueueDescriptions();
+        source.sendSuccess(() -> Component.literal("§6📋 任务队列 (" + queue.size() + "):\n§7" + String.join("\n§7", descs)), false);
+        return 1;
+    }
+
+    private static int clearQueue(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) return 0;
+
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("§c你没有同伴"));
+            return 0;
+        }
+
+        companion.getTaskQueue().clear();
+        source.sendSuccess(() -> Component.literal("§a任务队列已清空"), false);
+        return 1;
     }
 
     // ==================== 工具方法 ====================

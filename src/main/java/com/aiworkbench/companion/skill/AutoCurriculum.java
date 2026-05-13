@@ -2,6 +2,9 @@ package com.aiworkbench.companion.skill;
 
 import com.aiworkbench.companion.AICompanionMod;
 import com.aiworkbench.companion.ai.PerceptionEngine;
+import com.aiworkbench.companion.ai.UtilityEvaluator;
+import com.aiworkbench.companion.ai.UtilityEvaluator.GoalType;
+import com.aiworkbench.companion.ai.UtilityEvaluator.ScoredGoal;
 import com.aiworkbench.companion.entity.AutomatonEntity;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
@@ -122,6 +125,83 @@ public class AutoCurriculum {
         }
 
         return null; // 无需提议
+    }
+
+    /**
+     * 收集所有可行提议，用 UtilityEvaluator 打分排序后返回。
+     * <p>
+     * 与 proposeNextTask 不同，此方法不只看第一层匹配，而是收集所有层的提议，
+     * 用效用评分（0~1）排序，让决策"哪个性价比最高"而非"哪个优先级标签最高"。
+     *
+     * @param entity 同伴实体
+     * @return 按效用分数降序排列的提议列表（可能为空）
+     */
+    public static List<CurriculumProposal> proposeQueue(AutomatonEntity entity) {
+        List<CurriculumProposal> proposals = new ArrayList<>();
+        if (entity == null || !entity.isAlive() || entity.level().isClientSide) {
+            return proposals;
+        }
+
+        PerceptionEngine.PerceptionData perception = PerceptionEngine.gatherPerception(entity);
+        if (perception == null) {
+            return proposals;
+        }
+
+        // 收集所有层的提议
+        CurriculumProposal p;
+
+        p = evaluateSurvival(entity, perception);
+        if (p != null) proposals.add(p);
+
+        p = evaluateTimeSensitive(entity);
+        if (p != null) proposals.add(p);
+
+        p = evaluateInventory(entity);
+        if (p != null) proposals.add(p);
+
+        p = evaluateResources(entity, perception);
+        if (p != null) proposals.add(p);
+
+        p = evaluateToolUpgrade(entity);
+        if (p != null) proposals.add(p);
+
+        if (proposals.isEmpty()) return proposals;
+
+        // 用 UtilityEvaluator 打分并排序
+        GoalType currentGoal = inferCurrentGoal(entity);
+        Map<CurriculumProposal, Double> scores = new LinkedHashMap<>();
+        for (CurriculumProposal proposal : proposals) {
+            GoalType goal = mapToGoalType(proposal);
+            ScoredGoal scored = UtilityEvaluator.evaluate(entity, perception, currentGoal);
+            double score = UtilityEvaluator.getScore(goal, entity, perception);
+            scores.put(proposal, score);
+        }
+
+        proposals.sort((a, b) -> Double.compare(scores.getOrDefault(b, 0.0), scores.getOrDefault(a, 0.0)));
+
+        return proposals;
+    }
+
+    /** 推断当前正在执行的目标类型 */
+    private static GoalType inferCurrentGoal(AutomatonEntity entity) {
+        if (entity.isGuardModeEnabled()) return GoalType.COMBAT;
+        if (entity.isGatherModeEnabled()) return GoalType.GATHER_RESOURCE;
+        if (entity.isFarmModeEnabled()) return GoalType.GATHER_RESOURCE;
+        if (entity.isFollowModeActive()) return GoalType.EXPLORE;
+        return null;
+    }
+
+    /** 将提议映射到效用评估器的目标类型 */
+    private static GoalType mapToGoalType(CurriculumProposal proposal) {
+        if (proposal.suggestedSkill == null) return GoalType.EXPLORE;
+        return switch (proposal.suggestedSkill) {
+            case "retreat", "retreat_heal", "avoid_lava" -> GoalType.SURVIVAL;
+            case "night_shelter" -> GoalType.BUILD_SHELTER;
+            case "inventory_full" -> GoalType.MANAGE_INVENTORY;
+            case "gather" -> GoalType.GATHER_RESOURCE;
+            case "craftWoodenPickaxe", "craftStonePickaxe", "craftIronPickaxe" -> GoalType.CRAFT_TOOL;
+            default -> GoalType.EXPLORE;
+        };
     }
 
     /**

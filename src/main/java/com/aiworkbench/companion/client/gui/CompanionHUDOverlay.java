@@ -154,6 +154,13 @@ public class CompanionHUDOverlay {
             String distColor = dist > 20 ? "§c" : (dist > 10 ? "§e" : "§a");
             graphics.drawString(mc.font, "§7距离: " + distColor + String.format("%.1f", dist) + "m",
                 textX, textY, 0xFFFFFF, false);
+
+            // Line 6: Task queue status (if non-empty)
+            if (!companion.getTaskQueue().isEmpty()) {
+                textY += LINE_HEIGHT;
+                int qSize = companion.getTaskQueue().size();
+                graphics.drawString(mc.font, "§7📋 队列: §b" + qSize + "个任务", textX, textY, 0xFFFFFF, false);
+            }
         } catch (Exception e) {
             AICompanionMod.LOGGER.error("[HUD] Render error: " + e.getMessage());
         }

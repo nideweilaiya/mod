@@ -19,6 +19,8 @@ public class CompanionBehaviorCommands {
     public static void register(LiteralArgumentBuilder<CommandSourceStack> parent) {
         parent.then(Commands.literal("guard")
                         .executes(ctx -> toggleGuard(ctx.getSource())))
+                .then(Commands.literal("pickup").executes(ctx -> togglePickup(ctx.getSource())))
+                .then(Commands.literal("auto").executes(ctx -> toggleAuto(ctx.getSource())))
                 .then(Commands.literal("gather")
                         .executes(ctx -> toggleGather(ctx.getSource()))
                         .then(Commands.literal("ores")
@@ -57,7 +59,9 @@ public class CompanionBehaviorCommands {
                                 .executes(ctx -> testScan(ctx.getSource())))
                         .then(Commands.literal("upgrade")
                                 .executes(ctx -> testUpgrade(ctx.getSource())))
-                        .then(Commands.literal("gather")
+                        .then(Commands.literal("pickup").executes(ctx -> togglePickup(ctx.getSource())))
+                .then(Commands.literal("auto").executes(ctx -> toggleAuto(ctx.getSource())))
+                .then(Commands.literal("gather")
                                 .executes(ctx -> testGather(ctx.getSource()))))
                 .then(Commands.literal("build")
                         .then(Commands.argument("blueprint", StringArgumentType.greedyString())
@@ -391,6 +395,28 @@ public class CompanionBehaviorCommands {
 
         companion.confirmProposal();
         source.sendSuccess(() -> Component.literal("§a已确认提议！同伴开始执行"), true);
+        return 1;
+    }
+
+    private static int togglePickup(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) { source.sendFailure(Component.literal("必须由玩家执行")); return 0; }
+        AutomatonEntity c = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (c == null) { source.sendFailure(Component.literal("没有同伴")); return 0; }
+        boolean now = !c.isGatherModeEnabled();
+        c.setGatherModeEnabled(now);
+        source.sendSuccess(() -> Component.literal(now ? "§e拾取模式已开启" : "§7拾取模式已关闭"), false);
+        return 1;
+    }
+
+    private static int toggleAuto(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) { source.sendFailure(Component.literal("必须由玩家执行")); return 0; }
+        AutomatonEntity c = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (c == null) { source.sendFailure(Component.literal("没有同伴")); return 0; }
+        boolean now = !c.isGuardModeEnabled();
+        c.setGuardModeEnabled(now);
+        source.sendSuccess(() -> Component.literal(now ? "§a自主模式已开启" : "§7自主模式已关闭"), false);
         return 1;
     }
 }

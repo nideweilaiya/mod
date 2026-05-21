@@ -1,5 +1,6 @@
 package com.aiworkbench.companion.memory;
 
+import com.aiworkbench.companion.AICompanionMod;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.reflect.TypeToken;
@@ -58,7 +59,7 @@ public class MemoryStore {
         try {
             Files.write(logFile, line.getBytes(StandardCharsets.UTF_8),
                 StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-        } catch (IOException ignored) {}
+        } catch (IOException ignored) { AICompanionMod.LOGGER.warn("[MemoryStore] {}: {}", ignored.getClass().getSimpleName(), ignored.getMessage()); }
     }
 
     public List<Map<String, Object>> readRecentConversations(String uuid, int max) {
@@ -75,11 +76,11 @@ public class MemoryStore {
                         Map<String, Object> entry = GSON.fromJson(line, Map.class);
                         buffer.add(entry);
                         if (buffer.size() > max) buffer.removeFirst();
-                    } catch (Exception ignored) {}
+                    } catch (Exception ignored) { AICompanionMod.LOGGER.warn("[MemoryStore] {}: {}", ignored.getClass().getSimpleName(), ignored.getMessage()); }
                 }
             }
             result.addAll(buffer);
-        } catch (IOException ignored) {}
+        } catch (IOException ignored) { AICompanionMod.LOGGER.warn("[MemoryStore] {}: {}", ignored.getClass().getSimpleName(), ignored.getMessage()); }
         return result;
     }
 
@@ -93,7 +94,7 @@ public class MemoryStore {
         data.put("summary", summary);
         try {
             Files.write(file, GSON.toJson(data).getBytes(StandardCharsets.UTF_8));
-        } catch (IOException ignored) {}
+        } catch (IOException ignored) { AICompanionMod.LOGGER.warn("[MemoryStore] {}: {}", ignored.getClass().getSimpleName(), ignored.getMessage()); }
     }
 
     public List<Map<String, Object>> loadAllSummaries(String uuid) {
@@ -105,9 +106,9 @@ public class MemoryStore {
                     String content = Files.readString(file, StandardCharsets.UTF_8);
                     Map<String, Object> data = GSON.fromJson(content, Map.class);
                     summaries.add(data);
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) { AICompanionMod.LOGGER.warn("[MemoryStore] {}: {}", ignored.getClass().getSimpleName(), ignored.getMessage()); }
             }
-        } catch (IOException ignored) {}
+        } catch (IOException ignored) { AICompanionMod.LOGGER.warn("[MemoryStore] {}: {}", ignored.getClass().getSimpleName(), ignored.getMessage()); }
         summaries.sort(Comparator.comparingInt(m -> ((Number) m.getOrDefault("block", 0)).intValue()));
         return summaries;
     }
@@ -133,7 +134,7 @@ public class MemoryStore {
         Path file = companionDir(uuid).resolve("profile.json");
         try {
             Files.write(file, GSON.toJson(profile).getBytes(StandardCharsets.UTF_8));
-        } catch (IOException ignored) {}
+        } catch (IOException ignored) { AICompanionMod.LOGGER.warn("[MemoryStore] {}: {}", ignored.getClass().getSimpleName(), ignored.getMessage()); }
     }
 
     // ==================== 关键词检索 ====================

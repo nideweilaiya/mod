@@ -1,0 +1,22 @@
+# Build artifacts
+build/
+run/
+build_err.txt
+
+# Gradle
+.gradle/
+
+# Code graph cache
+.codegraph/
+
+# Logs
+logs/*.log.gz
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db

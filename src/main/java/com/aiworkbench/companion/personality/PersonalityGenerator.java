@@ -2,6 +2,7 @@ package com.aiworkbench.companion.personality;
 
 import com.aiworkbench.companion.AICompanionMod;
 import com.aiworkbench.companion.ai.OllamaClient;
+import com.aiworkbench.companion.ai.OllamaClient;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.util.LinkedHashMap;
@@ -42,7 +43,7 @@ public class PersonalityGenerator {
         CompletableFuture.runAsync(() -> {
             try {
                 LinkedHashMap<String, Object> opts = new LinkedHashMap<>();
-                opts.put("temperature", 0.3);
+                opts.put("temperature", OllamaClient.TEMP_BALANCED);
                 opts.put("num_predict", 150);
 
                 String response = OllamaClient.chat(model, SYSTEM_PROMPT, description, opts, 20000, 2);

@@ -1,6 +1,7 @@
 package com.aiworkbench.companion.memory;
 
 import com.aiworkbench.companion.AICompanionMod;
+import com.aiworkbench.companion.ai.OllamaClient;
 import com.google.gson.Gson;
 
 import java.io.BufferedReader;
@@ -42,7 +43,7 @@ public class MemorySummarizer {
             Map<String, Object> request = new LinkedHashMap<>();
             request.put("model", com.aiworkbench.companion.CompanionConfig.getDefaultModel());
             request.put("stream", false);
-            request.put("options", Map.of("temperature", 0.1, "num_predict", 80));
+            request.put("options", Map.of("temperature", OllamaClient.TEMP_PRECISE, "num_predict", 80));
 
             List<Map<String, String>> messages = new ArrayList<>();
             messages.add(Map.of("role", "user", "content", prompt));

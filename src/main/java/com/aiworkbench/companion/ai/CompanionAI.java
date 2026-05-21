@@ -1,6 +1,7 @@
 package com.aiworkbench.companion.ai;
 
 import com.aiworkbench.companion.AICompanionMod;
+import com.aiworkbench.companion.ai.OllamaClient;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.util.*;
@@ -62,7 +63,7 @@ public class CompanionAI {
         + "\n重要规则：\n"
         + "1. 任何任务/行动请求 → 必须输出 [SKILL:技能名]\n"
         + "2. 纯聊天/问问题 → 正常中文回复，不要加 [SKILL:]\n"
-        + "3. [SKILL:xxx] 后面不要加任何文字\n"
+        + "3. SKILL命令后不要加任何文字\n"
         + "4. 技能名区分大小写：是 mineIronOre 不是 MineIronOre\n"
         + "5. 如果没有匹配的技能，回复\"我还不会做这个呢\"\n"
         + "6. 如需创建新技能，用 [GENERATE:简短描述]\n"
@@ -321,7 +322,7 @@ public class CompanionAI {
         messages.add(Map.of("role", "user", "content", prompt));
 
         java.util.LinkedHashMap<String, Object> opts = new java.util.LinkedHashMap<>();
-        opts.put("temperature", 0.3);
+        opts.put("temperature", OllamaClient.TEMP_BALANCED);
         opts.put("num_predict", 150);
 
         String result = com.aiworkbench.companion.ai.OllamaClient.chat(

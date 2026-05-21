@@ -32,8 +32,8 @@ public class CompanionQuickMenuScreen extends Screen {
         boolean guarding = c != null && c.isGuardModeEnabled();
         boolean farming = c != null && c.isFarmModeEnabled();
 
-        int btnW = 140, btnH = 20, gap = 2;
-        int y = cy;
+        int btnW = 120, btnH = 18, gap = 1;
+        int y = Math.max(cy, 20); // 自适应顶部
         // 标题
         addRenderableWidget(Button.builder(Component.literal("§6§l同伴操作"), btn -> {})
             .bounds(cx - 50, y, 100, 14).build());
@@ -61,7 +61,7 @@ public class CompanionQuickMenuScreen extends Screen {
         y += btnH + gap;
 
         // 背包
-        addRenderableWidget(Button.builder(Component.literal("§e🎒 打开背包"), btn -> {
+        addRenderableWidget(Button.builder(Component.literal("§e🎒 背包"), btn -> {
             sendCmd("companion openinv"); this.onClose();
         }).bounds(cx - btnW/2, y, btnW, btnH).build());
         y += btnH + gap;

@@ -60,6 +60,7 @@ public class AICompanionMod {
                 return new CompanionContainer(containerId, inv, entityId);
             }));
 
+    @SuppressWarnings("deprecation")
     public AICompanionMod() {
         // Register entity types, items, creative tab, and menu types on the MOD bus
         EntityInit.register(FMLJavaModLoadingContext.get().getModEventBus());

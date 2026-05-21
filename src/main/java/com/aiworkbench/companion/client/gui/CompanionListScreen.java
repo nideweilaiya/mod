@@ -203,7 +203,7 @@ public class CompanionListScreen extends Screen {
                 try {
                     Thread.sleep(300);
                     queryCompanionStatus();
-                } catch (InterruptedException e) {}
+                } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
             });
         }
     }

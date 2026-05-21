@@ -397,6 +397,15 @@ public class CompanionAICommands {
      * 执行一个预制技能。如果玩家未学习，自动学习。
      * @return true 如果技能成功启动
      */
+    private static boolean handleSpecialSkill(AutomatonEntity companion, String skillName) {
+        if ("retreat".equalsIgnoreCase(skillName) || "flee".equalsIgnoreCase(skillName)) {
+            companion.returnToFollow();
+            companion.showDialogue("\u00a7bretreat!", 60);
+            return true;
+        }
+        return false;
+    }
+
     private static boolean executePresetSkill(ServerPlayer player, AutomatonEntity companion,
                                               UUID playerUUID, String skillName) {
         // "gather" 是特殊动作：开启智能采集模式而非技能

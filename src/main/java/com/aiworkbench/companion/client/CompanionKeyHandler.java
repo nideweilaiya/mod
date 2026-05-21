@@ -35,6 +35,7 @@ public class CompanionKeyHandler {
     public static final String KEY_CONTROL_MENU = "key.aicompanion.control_menu";
     public static final String KEY_SKILL_SCREEN = "key.aicompanion.skill_screen";
     public static final String KEY_CHAT_MODE = "key.aicompanion.chat_mode";
+    public static final String KEY_CONFIRM = "key.aicompanion.confirm";
 
     // Keys: C=list, G=settings, B=backpack, K=teleport, V=follow toggle, ESC=cancel task, H=HUD, N=menu, P=skills, J=chat mode
     public static final KeyMapping OPEN_LIST_KEY = new KeyMapping(
@@ -90,6 +91,12 @@ public class CompanionKeyHandler {
     );
 
     // P键 - 打开技能库
+    public static final KeyMapping CONFIRM_KEY = new KeyMapping(
+        KEY_CONFIRM,
+        GLFW.GLFW_KEY_R,
+        CATEGORY
+    );
+
     public static final KeyMapping SKILL_SCREEN_KEY = new KeyMapping(
         KEY_SKILL_SCREEN,
         GLFW.GLFW_KEY_P,
@@ -140,9 +147,9 @@ public class CompanionKeyHandler {
                 mc.setScreen(new CompanionListScreen(null));
             }
 
-            // G 键 - 打开设置面板
+            // G 键 - 打开快捷操作菜单
             if (OPEN_SETTINGS_KEY.consumeClick()) {
-                mc.setScreen(new CompanionSettingsScreen(null));
+                mc.setScreen(new com.aiworkbench.companion.client.gui.CompanionQuickMenuScreen(null));
             }
 
             // B 键 - 打开同伴背包 Container

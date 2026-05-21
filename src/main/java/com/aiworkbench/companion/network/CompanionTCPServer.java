@@ -55,7 +55,7 @@ public class CompanionTCPServer {
         if (!running) return;
         running = false;
         for (ClientHandler handler : clients.values()) {
-            try { handler.close(); } catch (IOException ignored) {}
+            try { handler.close(); } catch (IOException e) { AICompanionMod.LOGGER.warn("[TCPServer] IO: {}", e.getMessage()); }
         }
         clients.clear();
         try {
@@ -112,7 +112,7 @@ public class CompanionTCPServer {
             AICompanionMod.LOGGER.info("Client disconnected (Connection ID: " + handler.connectionId + ")");
         } finally {
             clients.remove(handler.connectionId);
-            try { handler.close(); } catch (IOException ignored) {}
+            try { handler.close(); } catch (IOException e) { AICompanionMod.LOGGER.warn("[TCPServer] IO: {}", e.getMessage()); }
             AICompanionMod.LOGGER.info("Client removed. Active clients: " + clients.size());
         }
     }
@@ -357,9 +357,9 @@ public class CompanionTCPServer {
         }
 
         void close() throws IOException {
-            try { if (out != null) out.close(); } catch (Exception ignored) {}
-            try { if (in != null) in.close(); } catch (Exception ignored) {}
-            try { if (socket != null) socket.close(); } catch (Exception ignored) {}
+            try { if (out != null) out.close(); } catch (Exception e) { AICompanionMod.LOGGER.warn("[TCPServer] Error: {}", e.getMessage()); }
+            try { if (in != null) in.close(); } catch (Exception e) { AICompanionMod.LOGGER.warn("[TCPServer] Error: {}", e.getMessage()); }
+            try { if (socket != null) socket.close(); } catch (Exception e) { AICompanionMod.LOGGER.warn("[TCPServer] Error: {}", e.getMessage()); }
         }
     }
 

@@ -109,4 +109,9 @@ public class CompanionClientState {
     public static void setChatMode(boolean mode) {
         chatMode = mode;
     }
+    /** Force clear cache so next getCompanion() re-scans the world. */
+    public static void forceRefresh() {
+        cachedCompanion = null;
+        cacheTick = -1;
+    }
 }

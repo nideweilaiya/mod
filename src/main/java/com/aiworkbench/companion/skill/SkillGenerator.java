@@ -1,6 +1,7 @@
 package com.aiworkbench.companion.skill;
 
 import com.aiworkbench.companion.AICompanionMod;
+import com.aiworkbench.companion.ai.OllamaClient;
 import com.aiworkbench.companion.entity.AutomatonEntity;
 import com.aiworkbench.companion.skill.atomic.*;
 import com.google.gson.Gson;
@@ -148,7 +149,7 @@ public class SkillGenerator {
      */
     private static String callLLM(String prompt) {
         java.util.LinkedHashMap<String, Object> opts = new java.util.LinkedHashMap<>();
-        opts.put("temperature", 0.1);
+        opts.put("temperature", OllamaClient.TEMP_PRECISE);
         opts.put("num_predict", 500);
         return com.aiworkbench.companion.ai.OllamaClient.chat(
             MODEL, SYSTEM_PROMPT, prompt, opts, TIMEOUT_MS, MAX_RETRIES);

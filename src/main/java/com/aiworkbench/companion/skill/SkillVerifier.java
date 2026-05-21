@@ -1,6 +1,7 @@
 package com.aiworkbench.companion.skill;
 
 import com.aiworkbench.companion.AICompanionMod;
+import com.aiworkbench.companion.ai.OllamaClient;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 
@@ -136,7 +137,7 @@ public class SkillVerifier {
 
     private static String callLLM(String prompt, String model) {
         java.util.LinkedHashMap<String, Object> opts = new java.util.LinkedHashMap<>();
-        opts.put("temperature", 0.1);
+        opts.put("temperature", OllamaClient.TEMP_PRECISE);
         opts.put("num_predict", 200);
         return com.aiworkbench.companion.ai.OllamaClient.chat(
             model, SYSTEM_PROMPT, prompt, opts, 45000, 2);

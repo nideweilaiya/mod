@@ -31,6 +31,10 @@ public final class OllamaClient {
     private static final Gson GSON = new GsonBuilder().create();
     private static final int DEFAULT_TIMEOUT = 30000;
     private static final int DEFAULT_RETRIES = 2;
+    // v1.0.1: 温度常量，集中管理避免散落各处
+    public static final double TEMP_CREATIVE = 0.8;
+    public static final double TEMP_BALANCED = 0.3;
+    public static final double TEMP_PRECISE = 0.1;
     private static final java.util.regex.Pattern THINK_PATTERN =
         java.util.regex.Pattern.compile("<think>[\\s\\S]*?</think>", java.util.regex.Pattern.DOTALL);
 
@@ -167,16 +171,17 @@ public final class OllamaClient {
      */
     @SuppressWarnings("unchecked")
     public static Map<String, Object> extractJson(String content) {
-        if (content == null) return null;
+        if (content == null || content.isEmpty()) return Collections.emptyMap();
         content = THINK_PATTERN.matcher(content).replaceAll("").trim();
         int s = content.indexOf('{');
         int e = content.lastIndexOf('}');
-        if (s < 0 || e < 0 || s >= e) return null;
+        if (s < 0 || e < 0 || s >= e) return Collections.emptyMap();
         try {
             return GSON.fromJson(content.substring(s, e + 1),
                 new TypeToken<Map<String, Object>>(){}.getType());
         } catch (Exception ex) {
-            return null;
+            AICompanionMod.LOGGER.warn("[OllamaClient] extractJson failed: {}", ex.getMessage());
+            return Collections.emptyMap();
         }
     }
 
@@ -204,6 +209,6 @@ public final class OllamaClient {
     }
 
     private static void sleep(long ms) {
-        try { Thread.sleep(ms); } catch (InterruptedException ignored) {}
+        try { Thread.sleep(ms); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
     }
 }

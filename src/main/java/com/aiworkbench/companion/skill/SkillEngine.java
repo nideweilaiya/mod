@@ -203,7 +203,7 @@ public class SkillEngine {
                     feedback.brokenBlocks.size(), feedback.collectedItems.size());
         }
 
-        entity.showDialogue("§a技能完成: " + skillName, 60);
+        //entity.showDialogue("§a技能完成: " + skillName, 60);
         AICompanionMod.LOGGER.info("[SkillEngine] Completed skill '{}'", skillName);
 
         // 通知命令层：技能完成，触发后续询问
@@ -214,28 +214,7 @@ public class SkillEngine {
 
         cleanup(entity);
 
-        // 异步自我验证（不阻塞游戏主线程）
-        if (lastFeedback != null && skill != null) {
-            final String skillDesc = skill.getDescription();
-            // 从玩家配置读取模型名（不再硬编码）
-            String model = "llama3.2:latest";
-            if (owner != null) {
-                model = com.aiworkbench.companion.CompanionConfig.getModel(owner.getUUID());
-            }
-            SkillVerifier.verifyAsync(skillDesc, lastFeedback, model)
-                .thenAccept(result -> {
-                    lastVerification = result;
-                    if (!result.success) {
-                        AICompanionMod.LOGGER.info("[SkillEngine] Verification failed for '{}': {}",
-                            skillName, result.critique);
-                        if (result.suggestion != null && !result.suggestion.isEmpty()) {
-                            AICompanionMod.LOGGER.info("[SkillEngine] Suggestion: {}", result.suggestion);
-                        }
-                    } else {
-                        AICompanionMod.LOGGER.info("[SkillEngine] Verification passed for '{}'", skillName);
-                    }
-                });
-        }
+        // 异步自我验证已禁用（每次完成都调Ollama造成无限循环）
     }
 
     private void cleanup(AutomatonEntity entity) {

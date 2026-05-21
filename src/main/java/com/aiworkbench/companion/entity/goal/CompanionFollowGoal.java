@@ -25,7 +25,7 @@ public class CompanionFollowGoal extends Goal {
     // Note: PathNavigation multiplies this by entity's MOVEMENT_SPEED attribute (0.25)
     // So 1.0 = 0.25 blocks/tick, 4.0 = 1.0 blocks/tick (player walk)
     // Target: companion should move at ~3-4 blocks/sec when far, ~2 blocks/sec when close
-    private static final double NAV_SPEED_FAR = 4.0;   // 1.0 blocks/tick = ~player walk
+    private static final double NAV_SPEED_FAR = 2.5;   // 1.0 blocks/tick = ~player walk
     private static final double NAV_SPEED_CLOSE = 2.0; // 0.5 blocks/tick = comfortable follow
 
     // Distance thresholds (squared)

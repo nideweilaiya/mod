@@ -50,7 +50,7 @@ public class CompanionGuardGoal extends Goal {
     private static final int STRAFE_INTERVAL = 30; // 每1.5秒换个方向
 
     // 撤退
-    private static final float RETREAT_HEALTH = 10f; // 低于10血撤退
+    private static final float RETREAT_HEALTH = 0f; // 低于10血撤退
     private int retreatTicks;
 
     // 远程攻击
@@ -74,15 +74,16 @@ public class CompanionGuardGoal extends Goal {
         if (companion.getOwnerUUID() == null) return false;
 
         target = findTarget();
-        return target != null;
+        return true;
     }
 
     @Override
     public boolean canContinueToUse() {
         if (!companion.isGuardModeEnabled()) return false;
         if (companion.isSkillActive()) return false;
-        if (target == null || !target.isAlive()) return false;
-        return target.distanceToSqr(companion) < range * range * 2;
+        AICompanionMod.LOGGER.info("[GuardGoal] canContinueToUse=true, guardEnabled={}, target={}",
+            companion.isGuardModeEnabled(), target != null ? target.getName().getString() : "null");
+        return true;
     }
 
     @Override
@@ -99,42 +100,22 @@ public class CompanionGuardGoal extends Goal {
     }
 
     @Override
-    public void stop() {
+        public void stop() {
+        AICompanionMod.LOGGER.info("[GuardGoal] STOP called! guardEnabled={}", companion.isGuardModeEnabled());
         inCombat = false;
-        companion.stopUsingItem(); // 停弓动画
-        String enemyName = target != null ? target.getName().getString() : "敌人";
+        companion.stopUsingItem();
         target = null;
         equipped = false;
-        companion.setGuardTarget(null);
         companion.getNavigation().stop();
-        companion.setGuardModeEnabled(false);
-        // Restore the mode that was active before combat interrupted
-        var previous = companion.getPreCombatState();
-        companion.setPreCombatState(CompanionState.FOLLOW);
-        switch (previous) {
-            case GATHER -> {
-                companion.setGatherModeEnabled(true);
-                companion.showDialogue("§a威胁清除，继续采集", 40);
-                AICompanionMod.LOGGER.info("[GuardGoal] Disengaged → restore gather");
-            }
-            case FARM -> {
-                companion.setFarmModeEnabled(true);
-                companion.showDialogue("§a威胁清除，继续种植", 40);
-                AICompanionMod.LOGGER.info("[GuardGoal] Disengaged → restore farm");
-            }
-            default -> {
-                companion.returnToFollow();
-                companion.showDialogue("§a威胁清除", 40);
-                AICompanionMod.LOGGER.info("[GuardGoal] Disengaged → follow");
-            }
-        }
-        companion.addRecentEvent("combat_end", "击败了" + enemyName);
-        companion.triggerEventResponse("combat_end", java.util.Map.of("enemy", enemyName));
     }
 
     @Override
-    public void tick() {
-        if (target == null || !target.isAlive()) { inCombat = false; return; }
+public void tick() {
+        if (target == null || !target.isAlive()) {
+            inCombat = false;
+            target = findTarget();
+            if (target == null) return; // standby
+        }
 
         // 进入战斗自动装备
         if (!equipped) { equipForCombat(); equipped = true; }
@@ -146,11 +127,7 @@ public class CompanionGuardGoal extends Goal {
         }
 
         // 低血撤退
-        if (companion.getHealth() < RETREAT_HEALTH) {
-            retreat();
-            return;
-        }
-        retreatTicks = 0;
+        retreatTicks = 0; // retreat disabled
 
         double distSq = companion.distanceToSqr(target);
         companion.getLookControl().setLookAt(target, 30f, companion.getMaxHeadYRot());

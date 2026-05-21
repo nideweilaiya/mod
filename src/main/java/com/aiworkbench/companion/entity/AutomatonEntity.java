@@ -1,6 +1,7 @@
 package com.aiworkbench.companion.entity;
 
 import com.aiworkbench.companion.AICompanionMod;
+import com.aiworkbench.companion.ai.OllamaClient;
 import com.aiworkbench.companion.ai.DialogueStack;
 import com.aiworkbench.companion.ai.DialogueStack.PendingMessage;
 import com.aiworkbench.companion.ai.DialogueStack.MessagePriority;
@@ -101,10 +102,13 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     private int speedPoints = 0;      // 移动速度
     private int defensePoints = 0;    // 护甲
     private static final int POINTS_PER_LEVEL = 3;
-    private static final int MAX_SPEED_POINTS = 30;
-    private static final int MAX_ATTACK_POINTS = 30;
-    private static final int MAX_VITALITY_POINTS = 30;
-    private static final int MAX_DEFENSE_POINTS = 30;
+    private static final int MAX_SPEED_POINTS = 20;
+    private static final int MAX_ATTACK_POINTS = 20;
+    private static final int MAX_VITALITY_POINTS = 20;
+    private static final int MAX_DEFENSE_POINTS = 20;
+
+    /** Clean base movement speed. Set by applyStatAllocation. */
+    private double baseMoveSpeed = 0.1;
 
     // ==================== Fields ====================
 
@@ -487,13 +491,13 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         this.goalSelector.addGoal(1, new JumpGoal(this));
 
         // 2: Guard goal - attack hostile mobs threatening owner (only when isGuardModeEnabled()=true)
-        this.goalSelector.addGoal(2, new com.aiworkbench.companion.entity.goal.CompanionGuardGoal(this, 1.0, 10.0F));
+        this.goalSelector.addGoal(2, new com.aiworkbench.companion.entity.goal.CompanionGuardGoal(this, 3.0, 10.0F));
 
         // 3: Gather goal - smart resource gathering (ores + logs, when gatherModeEnabled)
-        this.goalSelector.addGoal(3, new com.aiworkbench.companion.entity.goal.CompanionGatherGoal(this, 0.8, 8.0F));
+        this.goalSelector.addGoal(3, new com.aiworkbench.companion.entity.goal.BTreeGatherGoal(this));
 
         // 4: Farm goal - crop harvesting + replanting (when farmModeEnabled)
-        this.goalSelector.addGoal(4, new com.aiworkbench.companion.entity.goal.CompanionFarmGoal(this, 0.7));
+        this.goalSelector.addGoal(4, new com.aiworkbench.companion.entity.goal.CompanionFarmGoal(this, 2.0));
 
         // 5: Follow owner when too far away
         // minDistance=2 blocks (stop), maxDistance=16 blocks (follow)
@@ -596,7 +600,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         if (!this.level().isClientSide && !respawnPending) {
             respawnPending = true;
 
-            dropInventoryItems();
+            // dropInventoryItems(); // keepInventory
 
             String deathCharId = characterId;
             int deathLevel = level;
@@ -823,6 +827,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             } else {
                 autoDefendTarget = null;
                 autoDefendTicks = 0;
+                this.getNavigation().stop();
             }
         }
 
@@ -955,7 +960,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         java.util.concurrent.CompletableFuture.runAsync(() -> {
             try {
                 java.util.LinkedHashMap<String, Object> opts = new java.util.LinkedHashMap<>();
-                opts.put("temperature", 0.1);
+                opts.put("temperature", OllamaClient.TEMP_PRECISE);
                 opts.put("num_predict", 100);
                 String content = com.aiworkbench.companion.ai.OllamaClient.chat(
                     model, null, promptStr, opts, 15000, 2);
@@ -1247,11 +1252,11 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         var speedAttr = this.getAttribute(Attributes.MOVEMENT_SPEED);
         if (speedAttr == null) return;
         if (hungerLevel <= 6) { this.setSprinting(false); return; } // 饥饿≤6不能疾跑（原版规则）
-        double baseSpeed = 0.1 + speedPoints * 0.01;
+        double baseSpeed = baseMoveSpeed;               
         ServerPlayer owner = getOwner();
         boolean shouldSprint = false;
         // 追随：距离>6格疾跑追赶（原16格太远），或跟随模式下距离>4格也跑
-        if (owner != null && (owner.isSprinting() || isFollowModeActive()) && this.distanceToSqr(owner) > 16.0) {
+        if (owner != null && this.distanceToSqr(owner) > 6.25) {
             shouldSprint = true;
         }
         // 战斗/采集/种植模式中自动疾跑
@@ -2111,6 +2116,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             case GUARD  -> "切换到守护模式";
             case GATHER -> "切换到采集模式";
             case FARM   -> "切换到种植模式";
+            case PATROL -> "巡逻模式";
             default     -> "切换到跟随模式";
         };
         showDialogue(label, 60);
@@ -2683,7 +2689,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
                     String prompt = "你是Minecraft中的" + companionRole.chineseName + "同伴，你刚达到满级Lv." + MAX_LEVEL +
                         "。请用一句话（15字以内）通知主人可以招募新同伴了。你有" + squadSize + "个同伴，最多" + CompanionManager.MAX_COMPANIONS + "个。";
                     java.util.LinkedHashMap<String, Object> opts = new java.util.LinkedHashMap<>();
-                    opts.put("temperature", 0.8);
+                    opts.put("temperature", OllamaClient.TEMP_CREATIVE);
                     opts.put("num_predict", 40);
                     String response = com.aiworkbench.companion.ai.OllamaClient.chat(model, null, prompt, opts, 10000, 1);
                     if (response != null && !response.isEmpty()) {
@@ -2692,7 +2698,8 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
                             getServer().execute(() -> showDialogue("§d💬 " + msg, 120));
                         }
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception e) {
+            AICompanionMod.LOGGER.warn("[AutomatonEntity] Action failed: {}", e.getMessage());}
             });
         }
     }
@@ -2776,10 +2783,11 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         double baseSpeed = 0.1;
         double baseArmor = 0.0;
 
-        double newHealth = baseHealth + vitalityPoints * 2.0;
-        double newAttack = baseAttack + strengthPoints * 0.5;
-        double newSpeed = baseSpeed + speedPoints * 0.01;
-        double newArmor = baseArmor + defensePoints * 0.5;
+        double newHealth = baseHealth + vitalityPoints * 1.0;
+        double newAttack = baseAttack + strengthPoints * 0.2;
+        double newSpeed = baseSpeed + speedPoints * 0.003;
+        this.baseMoveSpeed = newSpeed;
+        double newArmor = baseArmor + defensePoints * 0.3;
 
         var healthAttr = this.getAttribute(Attributes.MAX_HEALTH);
         if (healthAttr != null) healthAttr.setBaseValue(newHealth);

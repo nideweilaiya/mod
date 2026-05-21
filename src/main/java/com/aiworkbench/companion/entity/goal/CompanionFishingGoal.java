@@ -78,6 +78,10 @@ public class CompanionFishingGoal extends Goal {
                 double dist = companion.distanceToSqr(waterPos.getX(), waterPos.getY(), waterPos.getZ());
                 if (dist < 9.0) { // 3 blocks
                     companion.getNavigation().stop();
+                    if (!isSafePosition(companion.blockPosition())) {
+                        state = State.FIND_WATER;
+                        break;
+                    }
                     ensureRodEquipped();
                     state = State.CAST;
                     waitTimer = MIN_WAIT_TICKS + companion.getRandom().nextInt(MAX_WAIT_TICKS - MIN_WAIT_TICKS);
@@ -103,17 +107,46 @@ public class CompanionFishingGoal extends Goal {
                     state = State.REEL;
                 }
             }
-            case REEL -> {
-                // 收集掉落物 → 自动拾取会处理
-                castCooldown = 40; // 2秒后重新抛竿
-                state = State.FIND_WATER;
-            }
-            case COLLECT -> {
+                        case REEL -> {
+                companion.grantXp(10);
+                companion.showDialogue("\u00a7b+10 XP", 40);
+                discardJunkIfFull();
+                castCooldown = 40;
                 state = State.FIND_WATER;
             }
         }
     }
 
+    private boolean isSafePosition(BlockPos pos) {
+        if (pos == null) return false;
+        var state = companion.level().getBlockState(pos);
+        var below = companion.level().getBlockState(pos.below());
+        if (below.isAir() || below.liquid()) return false;
+        if (state.liquid()) return false;
+        if (!companion.level().getBlockState(pos.above(2)).isAir()) return false;
+        return true;
+    }
+
+    private static final java.util.Set<net.minecraft.world.item.Item> JUNK_ITEMS = java.util.Set.of(
+        Items.BONE, Items.STRING, Items.ROTTEN_FLESH, Items.SPIDER_EYE,
+        Items.POISONOUS_POTATO, Items.STICK, Items.VINE
+    );
+
+    private void discardJunkIfFull() {
+        int empty = 0;
+        for (int i = 0; i < companion.getInventorySize(); i++) {
+            if (companion.getItem(i).isEmpty()) empty++;
+        }
+        if (empty > 2) return;
+        for (int i = 0; i < companion.getInventorySize(); i++) {
+            ItemStack s = companion.getItem(i);
+            if (!s.isEmpty() && JUNK_ITEMS.contains(s.getItem())) {
+                companion.setItem(i, ItemStack.EMPTY);
+                empty++;
+                if (empty > 2) return;
+            }
+        }
+    }
     private BlockPos findWater() {
         BlockPos center = companion.blockPosition();
         BlockPos best = null;

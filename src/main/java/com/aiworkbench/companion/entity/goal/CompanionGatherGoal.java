@@ -51,13 +51,14 @@ public class CompanionGatherGoal extends Goal {
     // 卡住
     private BlockPos lastPos;
     private int stuckTicks;
-    private static final int STUCK_MAX = 30;
+    private static final int STUCK_MAX = 60;
     private static final double STUCK_SQ = 2.25;
 
     // 黑名单
     private final Set<BlockPos> blacklist = new HashSet<>();
+    private int completionCooldown = 0;
     private int blacklistTicks;
-    private static final int BLACKLIST_DURATION = 200;
+    private static final int BLACKLIST_DURATION = 600;
 
     // 整树
     private boolean treeMode;
@@ -116,7 +117,8 @@ public class CompanionGatherGoal extends Goal {
         return target != null;
     }
     @Override public boolean canContinueToUse() {
-        if (!companion.isGatherModeEnabled() || companion.isSkillActive()) return false;
+        if (!companion.isGatherModeEnabled()) return false;
+        if (companion.isSkillActive()) return true; // 技能激活时继续
         if (companion.isGuardModeEnabled()) return false;
         // 采集过程中遇敌→暂停采集，切守护（记住战前模式）
         if (hostilesNearby()) {
@@ -155,6 +157,11 @@ public class CompanionGatherGoal extends Goal {
 
     @Override
     public void tick() {
+        // v2.1 fix: 如果 SkillEngine 正在执行技能，完全暂停本 Goal
+        if (companion.getSkillEngine().isActive()) return;
+
+        // 技能冷却 (完成技能后暂停再重新开始)
+        if (completionCooldown > 0) { completionCooldown--; return; }
         // 黑名单倒计时
         if (blacklistTicks > 0) blacklistTicks--;
         else if (!blacklist.isEmpty()) { blacklist.clear(); }
@@ -186,7 +193,14 @@ public class CompanionGatherGoal extends Goal {
         if (target == null || !valid(target)) {
             target = scan();
             clearTarget();
-            if (target == null) return;
+            if (target == null) {
+                // All targets exhausted - cooldown before retry
+                if (blacklist.size() > 20) {
+                    blacklist.clear();
+                    blacklistTicks = 0;
+                }
+                return;
+            }
         }
 
         // === 走路/挖掘 ===
@@ -200,7 +214,6 @@ public class CompanionGatherGoal extends Goal {
         if (target != null && !companion.level().getBlockState(target).isAir()) {
             String name = companion.level().getBlockState(target).getBlock()
                 .builtInRegistryHolder().key().location().getPath();
-            companion.setActionText("⛏ " + name.replace("_", " "));
         }
 
         Vec3 center = Vec3.atCenterOf(target);
@@ -223,6 +236,7 @@ public class CompanionGatherGoal extends Goal {
                 if (skill != null) {
                     companion.getSkillEngine().startSkill(skill, companion);
                     AICompanionMod.LOGGER.info("[GatherGoal] Delegated to SkillEngine: {}", skill.getName());
+                    completionCooldown = 60; // 3秒冷却防止循环
                     return; // SkillEngine接管，GatherGoal暂停
                 }
             }
@@ -254,7 +268,12 @@ public class CompanionGatherGoal extends Goal {
                     AICompanionMod.LOGGER.info("[GatherGoal] Cannot reach {}, blacklisting", target);
                     blacklist.add(target.immutable()); blacklistTicks = BLACKLIST_DURATION;
                     pendingResource = null; barrierAttempts = 0;
-                    target = scan(); clearTarget();
+                    target = scan();
+                    clearTarget();
+                    if (target == null && blacklist.size() > 20) {
+                        blacklist.clear();
+                        blacklistTicks = 0;
+                    }
                     return;
                 }
                 barrierAttempts++;
@@ -523,7 +542,7 @@ public class CompanionGatherGoal extends Goal {
 
         net.minecraft.world.level.ClipContext ctx = new net.minecraft.world.level.ClipContext(
             eye, end,
-            net.minecraft.world.level.ClipContext.Block.COLLIDER,
+            net.minecraft.world.level.ClipContext.Block.VISUAL,
             net.minecraft.world.level.ClipContext.Fluid.NONE,
             companion);
         return companion.level().clip(ctx);
@@ -682,7 +701,11 @@ public class CompanionGatherGoal extends Goal {
     private boolean isBarrier(String n) {
         return n.contains("dirt")||n.contains("grass")||n.contains("stone")||n.contains("cobblestone")
             ||n.contains("gravel")||n.contains("sand")||n.contains("sandstone")
-            ||n.contains("netherrack")||n.contains("deepslate");
+            ||n.contains("netherrack")||n.contains("deepslate")
+            ||n.contains("leaves")||n.contains("leaf")||n.contains("vine")||n.contains("moss")
+            ||n.contains("snow")||n.contains("carpet")||n.contains("_plant")||n.contains("fern")
+            ||n.contains("grass")||n.contains("bamboo")||n.contains("cane")||n.contains("cobweb")
+            ||n.contains("scaffold")||n.contains("wool");
     }
     private boolean matchesAny(String n, Set<String> ks) { for (String k : ks) if (n.contains(k)) return true; return false; }
     private boolean valid(BlockPos p) { return p != null && !blacklist.contains(p) && !companion.level().getBlockState(p).isAir(); }

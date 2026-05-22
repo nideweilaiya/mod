@@ -124,12 +124,18 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     private String skinValue = "";
 
     // ==================== Unified State Machine ====================
-    /** 同伴行为状态 — 替代原本散落的5个boolean flag */
+    /** @deprecated v3.0: 使用 CapabilityScheduler 替代互斥枚举 */
+    @Deprecated
     public enum CompanionState {
         IDLE, FOLLOW, GUARD, GATHER, FARM, PATROL, SURVIVAL
     }
+    /** @deprecated v3.0: 委托给 scheduler */
+    @Deprecated
     private CompanionState currentState = CompanionState.FOLLOW;
-    private CompanionState preCombatState = CompanionState.FOLLOW; // 战斗中断前状态
+    private CompanionState preCombatState = CompanionState.FOLLOW;
+
+    // v3.0: 新能力系统（位掩码 + 三层调度）
+    private final CapabilityScheduler scheduler = new CapabilityScheduler();
 
     // ==================== Guard Mode (LivingEntity Combat) ====================
     private net.minecraft.world.entity.LivingEntity guardTarget = null;
@@ -1906,11 +1912,16 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             };
         }
 
-        // Load explicit mode flags (override WorkingMode-derived values — backward compat)
-        if (tag.contains("GuardMode") && tag.getBoolean("GuardMode")) currentState = CompanionState.GUARD;
-        if (tag.contains("GatherMode") && tag.getBoolean("GatherMode")) currentState = CompanionState.GATHER;
-        if (tag.contains("PatrolMode") && tag.getBoolean("PatrolMode")) currentState = CompanionState.PATROL;
-        if (tag.contains("FollowModeActive") && tag.getBoolean("FollowModeActive")) currentState = CompanionState.FOLLOW;
+        // v3.0: 优先从位掩码恢复能力（新格式）
+        if (tag.contains("Capabilities")) {
+            scheduler.loadFromNbt(tag.getInt("Capabilities"));
+        }
+        // Load explicit mode flags (backward compat with old format)
+        if (tag.contains("GuardMode") && tag.getBoolean("GuardMode")) scheduler.setActive(CapabilityFlags.GUARD);
+        if (tag.contains("GatherMode") && tag.getBoolean("GatherMode")) scheduler.setActive(CapabilityFlags.GATHER);
+        if (tag.contains("PatrolMode") && tag.getBoolean("PatrolMode")) scheduler.setActive(CapabilityFlags.PATROL);
+        if (tag.contains("FollowModeActive") && tag.getBoolean("FollowModeActive")) scheduler.setActive(CapabilityFlags.FOLLOW);
+        syncLegacyState();
         if (tag.contains("AutonomousMode")) autonomousMode = tag.getBoolean("AutonomousMode");
         if (tag.contains("CompanionRole")) companionRole = CompanionRole.valueOf(tag.getString("CompanionRole"));
         if (tag.contains("personality")) personality = CompanionPersonality.fromNBT(tag.getCompound("personality"));
@@ -1968,7 +1979,8 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         // Save working mode
         tag.putString("WorkingMode", this.entityData.get(DATA_WORKING_MODE));
 
-        // Save mode flags explicitly (defensive against WorkingMode loss)
+        // v3.0: 保存能力位掩码 (向后兼容：同时保留旧 boolean 标记)
+        tag.putInt("Capabilities", scheduler.getForNbt());
         tag.putBoolean("GuardMode", isGuardModeEnabled());
         tag.putBoolean("GatherMode", isGatherModeEnabled());
         tag.putBoolean("FarmMode", isFarmModeEnabled());
@@ -2103,25 +2115,14 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
      * - If in task mode: disable all tasks and return to follow mode
      */
     public boolean toggleFollowMode() {
-        if (modeToggleCooldown > 0) return currentState == CompanionState.FOLLOW;
-        modeToggleCooldown = MODE_TOGGLE_COOLDOWN_TICKS;
-        // Mode cycle: follow -> guard -> gather -> farm -> follow
-        switch (currentState) {
-            case FOLLOW -> transitionTo(CompanionState.GUARD);
-            case GUARD  -> transitionTo(CompanionState.GATHER);
-            case GATHER -> transitionTo(CompanionState.FARM);
-            default     -> transitionTo(CompanionState.FOLLOW);
-        }
+        if (!scheduler.canToggle()) return scheduler.isActive(CapabilityFlags.FOLLOW);
+        scheduler.markToggled(MODE_TOGGLE_COOLDOWN_TICKS);
+
+        int next = scheduler.cycleActive();
+        syncLegacyState();
         animateSwing();
-        String label = switch (currentState) {
-            case GUARD  -> "切换到守护模式";
-            case GATHER -> "切换到采集模式";
-            case FARM   -> "切换到种植模式";
-            case PATROL -> "巡逻模式";
-            default     -> "切换到跟随模式";
-        };
-        showDialogue(label, 60);
-        return currentState == CompanionState.FOLLOW;
+        showDialogue(CapabilityFlags.toChineseName(next) + "模式", 60);
+        return next == CapabilityFlags.FOLLOW;
     }
 
     /**
@@ -2129,9 +2130,10 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
      * Disables all task modes and sets isFollowModeActive() to true
      */
     public void returnToFollow() {
-        transitionTo(CompanionState.FOLLOW);
+        scheduler.jumpToFollow();
+        syncLegacyState();
         showDialogue("返回跟随模式", 60);
-        AICompanionMod.LOGGER.info("[AutomatonEntity] ESC: Returned to follow mode");
+        AICompanionMod.LOGGER.info("[AutomatonEntity] Returned to follow mode");
     }
 
     // ==================== Hide/Show (Companion Visibility) ====================
@@ -2422,43 +2424,77 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
 
     /** 保存当前状态为战斗前状态（供 GuardGoal 战斗结束后恢复） */
     public void savePreCombatState() {
-        if (currentState == CompanionState.GATHER || currentState == CompanionState.FARM) {
-            preCombatState = currentState;
+        if (scheduler.isActive(CapabilityFlags.GATHER) || scheduler.isActive(CapabilityFlags.FARM)
+                || scheduler.isActive(CapabilityFlags.PATROL)) {
+            scheduler.interruptForDanger("combat");
         }
+    }
+
+    /** 战斗结束恢复战前状态 */
+    public void restorePreCombatState() {
+        scheduler.resumeFromDanger();
+        syncLegacyState();
     }
 
     /** 统一的模式切换入口。自动处理互斥和音效。 */
+    /** @deprecated v3.0: 使用 scheduler.setActive() 替代 */
+    @Deprecated
     public void transitionTo(CompanionState newState) {
-        if (currentState == newState) return;
-        playModeSwitchSound();
-        CompanionState old = currentState;
-        currentState = newState;
-        if (newState != CompanionState.GUARD) {
+        // 映射到新能力系统
+        int cap = switch (newState) {
+            case GUARD -> CapabilityFlags.GUARD;
+            case GATHER -> CapabilityFlags.GATHER;
+            case FARM -> CapabilityFlags.FARM;
+            case PATROL -> CapabilityFlags.PATROL;
+            default -> CapabilityFlags.FOLLOW;
+        };
+        scheduler.setActive(cap);
+        syncLegacyState();
+        if (!scheduler.isActive(CapabilityFlags.GUARD)) {
             guardTarget = null;
         }
-        this.entityData.set(DATA_WORKING_MODE, newState.name().toLowerCase());
-        AICompanionMod.LOGGER.info("[AutomatonEntity] State: {} → {}", old, newState);
+        this.entityData.set(DATA_WORKING_MODE, scheduler.getActiveName().toLowerCase());
     }
 
-    public boolean isGuardModeEnabled()   { return currentState == CompanionState.GUARD; }
-    public boolean isGatherModeEnabled()  { return currentState == CompanionState.GATHER; }
-    public boolean isFarmModeEnabled()    { return currentState == CompanionState.FARM; }
-    public boolean isFollowModeActive()   { return currentState == CompanionState.FOLLOW; }
-    public boolean isPatrolModeEnabled()  { return currentState == CompanionState.PATROL; }
+    // v3.0: 委托给 CapabilityScheduler，保持旧方法签名兼容
+    public boolean isGuardModeEnabled()   { return scheduler.isActive(CapabilityFlags.GUARD); }
+    public boolean isGatherModeEnabled()  { return scheduler.isActive(CapabilityFlags.GATHER); }
+    public boolean isFarmModeEnabled()    { return scheduler.isActive(CapabilityFlags.FARM); }
+    public boolean isFollowModeActive()   { return scheduler.isActive(CapabilityFlags.FOLLOW); }
+    public boolean isPatrolModeEnabled()  { return scheduler.isActive(CapabilityFlags.PATROL); }
 
+    /** v3.0: 暴露调度器给新 Goal 使用 */
+    public CapabilityScheduler getScheduler() { return scheduler; }
+
+    // v3.0: 委托给 CapabilityScheduler
     public void setGuardModeEnabled(boolean enabled) {
-        if (enabled) transitionTo(CompanionState.GUARD);
-        else if (currentState == CompanionState.GUARD) transitionTo(CompanionState.FOLLOW);
+        if (enabled) scheduler.setActive(CapabilityFlags.GUARD);
+        else if (scheduler.isActive(CapabilityFlags.GUARD)) scheduler.setActive(CapabilityFlags.FOLLOW);
+        syncLegacyState();
     }
 
     public void setGatherModeEnabled(boolean enabled) {
-        if (enabled) transitionTo(CompanionState.GATHER);
-        else if (currentState == CompanionState.GATHER) transitionTo(CompanionState.FOLLOW);
+        if (enabled) scheduler.setActive(CapabilityFlags.GATHER);
+        else if (scheduler.isActive(CapabilityFlags.GATHER)) scheduler.setActive(CapabilityFlags.FOLLOW);
+        syncLegacyState();
     }
 
     public void setFarmModeEnabled(boolean enabled) {
-        if (enabled) transitionTo(CompanionState.FARM);
-        else if (currentState == CompanionState.FARM) transitionTo(CompanionState.FOLLOW);
+        if (enabled) scheduler.setActive(CapabilityFlags.FARM);
+        else if (scheduler.isActive(CapabilityFlags.FARM)) scheduler.setActive(CapabilityFlags.FOLLOW);
+        syncLegacyState();
+    }
+
+    /** 同步旧 currentState 到新 scheduler（过渡期兼容） */
+    private void syncLegacyState() {
+        int active = scheduler.getActiveLayer();
+        currentState = switch (active) {
+            case CapabilityFlags.GUARD -> CompanionState.GUARD;
+            case CapabilityFlags.GATHER -> CompanionState.GATHER;
+            case CapabilityFlags.FARM -> CompanionState.FARM;
+            case CapabilityFlags.PATROL -> CompanionState.PATROL;
+            default -> CompanionState.FOLLOW;
+        };
     }
 
     public void setPatrolModeEnabled(boolean enabled) {

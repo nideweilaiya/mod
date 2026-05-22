@@ -143,6 +143,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     // ==================== Gather Mode (智能统一采集) ====================
     private String gatherFilter = "all"; // "all", "ores", "wood"
     private final java.util.Set<String> gatherPriorityResources = new java.util.HashSet<>();
+    private String gatherTargetBlock = ""; // 指定采集目标方块ID，如 "minecraft:iron_ore"
 
     // ==================== Farm Mode (作物种植) ====================
 
@@ -2532,6 +2533,11 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             if (!r.isEmpty()) gatherPriorityResources.add(r.trim().toLowerCase());
         }
     }
+
+    /** 指定采集目标方块 (如 "minecraft:iron_ore")，空字符串表示不限 */
+    public String getGatherTargetBlock() { return gatherTargetBlock; }
+
+    public void setGatherTargetBlock(String blockId) { this.gatherTargetBlock = blockId; }
 
     // ==================== Item Collection ====================
 

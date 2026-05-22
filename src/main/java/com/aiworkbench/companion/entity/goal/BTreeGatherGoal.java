@@ -16,13 +16,14 @@ import net.minecraft.world.level.block.state.BlockState;
 import java.util.*;
 
 /**
- * v2.1: 行为树驱动的采集 Goal — 修复不停循环 + 目标锁定 + 流畅度
+ * v2.2: 行为树驱动的采集 Goal — 过滤 + 优先级 + Y范围 + 直接挖掘
  *
  * 核心改动:
- * 1. 技能只创建一次（缓存 skill 引用），不每 tick 重建
- * 2. 完成后强制冷却 60tick，防止立即重新扫描
- * 3. 扫描降频：目标完成后才扫描，不每 tick 扫
- * 4. BreakBlockAction 接收 TaskTarget 确保目标不丢失
+ * 1. 支持采集过滤 (ores/wood/all) 从 companion.getGatherFilter()
+ * 2. 支持玩家配置的优先级 (companion.getGatherPriorityResources())
+ * 3. 支持指定目标方块 (companion.getGatherTargetBlock())
+ * 4. Y 扫描范围扩展: -3~8 (覆盖头顶树木)
+ * 5. 直接用 BreakBlockAction 挖掘，不依赖 LLM/skill 匹配
  *
  * 行为树:
  *   Cooldown(60tick) ── Sequence("采集")
@@ -47,22 +48,45 @@ public class BTreeGatherGoal extends Goal {
 
     // ── 扫描参数 ──
     private static final int SCAN_RADIUS = 9;
-    private static final Map<String, Integer> BLOCK_PRIORITY = new LinkedHashMap<>();
+    private static final int SCAN_Y_MIN = -3;
+    private static final int SCAN_Y_MAX = 8;  // v2.2: 扩展到8格覆盖头顶树木
+
+    // 硬编码默认优先级 (1-100，越高越优先)
+    private static final Map<String, Integer> DEFAULT_PRIORITY = new LinkedHashMap<>();
     static {
-        BLOCK_PRIORITY.put("iron_ore", 40);
-        BLOCK_PRIORITY.put("coal_ore", 30);
-        BLOCK_PRIORITY.put("copper_ore", 25);
-        BLOCK_PRIORITY.put("diamond_ore", 60);
-        BLOCK_PRIORITY.put("emerald_ore", 55);
-        BLOCK_PRIORITY.put("gold_ore", 45);
-        BLOCK_PRIORITY.put("lapis_ore", 35);
-        BLOCK_PRIORITY.put("redstone_ore", 30);
-        BLOCK_PRIORITY.put("ancient_debris", 80);
-        BLOCK_PRIORITY.put("oak_log", 8);
-        BLOCK_PRIORITY.put("birch_log", 8);
-        BLOCK_PRIORITY.put("spruce_log", 8);
-        BLOCK_PRIORITY.put("stone", 1);
-        BLOCK_PRIORITY.put("dirt", 1);
+        // 矿石 (高优先级)
+        DEFAULT_PRIORITY.put("ancient_debris", 80);
+        DEFAULT_PRIORITY.put("diamond_ore", 60);
+        DEFAULT_PRIORITY.put("deepslate_diamond_ore", 60);
+        DEFAULT_PRIORITY.put("emerald_ore", 55);
+        DEFAULT_PRIORITY.put("deepslate_emerald_ore", 55);
+        DEFAULT_PRIORITY.put("gold_ore", 45);
+        DEFAULT_PRIORITY.put("deepslate_gold_ore", 45);
+        DEFAULT_PRIORITY.put("iron_ore", 40);
+        DEFAULT_PRIORITY.put("deepslate_iron_ore", 40);
+        DEFAULT_PRIORITY.put("lapis_ore", 35);
+        DEFAULT_PRIORITY.put("deepslate_lapis_ore", 35);
+        DEFAULT_PRIORITY.put("redstone_ore", 30);
+        DEFAULT_PRIORITY.put("deepslate_redstone_ore", 30);
+        DEFAULT_PRIORITY.put("coal_ore", 30);
+        DEFAULT_PRIORITY.put("deepslate_coal_ore", 30);
+        DEFAULT_PRIORITY.put("copper_ore", 25);
+        DEFAULT_PRIORITY.put("deepslate_copper_ore", 25);
+        DEFAULT_PRIORITY.put("nether_gold_ore", 35);
+        DEFAULT_PRIORITY.put("nether_quartz_ore", 20);
+        DEFAULT_PRIORITY.put("gilded_blackstone", 30);
+        // 木材 (中低优先级)
+        DEFAULT_PRIORITY.put("oak_log", 8);
+        DEFAULT_PRIORITY.put("birch_log", 8);
+        DEFAULT_PRIORITY.put("spruce_log", 8);
+        DEFAULT_PRIORITY.put("jungle_log", 8);
+        DEFAULT_PRIORITY.put("acacia_log", 8);
+        DEFAULT_PRIORITY.put("dark_oak_log", 8);
+        DEFAULT_PRIORITY.put("mangrove_log", 8);
+        DEFAULT_PRIORITY.put("cherry_log", 8);
+        // 其他
+        DEFAULT_PRIORITY.put("stone", 1);
+        DEFAULT_PRIORITY.put("dirt", 1);
     }
 
     public BTreeGatherGoal(AutomatonEntity companion) {
@@ -207,12 +231,16 @@ public class BTreeGatherGoal extends Goal {
     private TaskTarget scan() {
         Level level = companion.level();
         BlockPos origin = companion.blockPosition();
+        String filter = companion.getGatherFilter();               // "all", "ores", "wood"
+        java.util.Set<String> priorities = companion.getGatherPriorityResources();
+        String targetBlock = companion.getGatherTargetBlock();     // 如 "minecraft:iron_ore"
+
         TaskTarget best = null;
         int bestScore = 0;
         double bestDist = Double.MAX_VALUE;
 
         for (int dx = -SCAN_RADIUS; dx <= SCAN_RADIUS; dx++) {
-            for (int dy = -3; dy <= 5; dy++) {
+            for (int dy = SCAN_Y_MIN; dy <= SCAN_Y_MAX; dy++) {
                 for (int dz = -SCAN_RADIUS; dz <= SCAN_RADIUS; dz++) {
                     BlockPos p = origin.offset(dx, dy, dz);
                     BlockState state = level.getBlockState(p);
@@ -220,7 +248,30 @@ public class BTreeGatherGoal extends Goal {
                     if (state.getBlock().defaultDestroyTime() < 0) continue;
 
                     String name = state.getBlock().builtInRegistryHolder().key().location().getPath();
-                    int score = BLOCK_PRIORITY.getOrDefault(name, 0);
+                    String fullId = state.getBlock().builtInRegistryHolder().key().location().toString();
+
+                    // ── 指定目标过滤 ──
+                    if (targetBlock != null && !targetBlock.isEmpty()) {
+                        if (!fullId.equals(targetBlock)) continue;
+                    }
+
+                    // ── 类型过滤 ──
+                    if ("ores".equals(filter) && !isOreBlock(name)) continue;
+                    if ("wood".equals(filter) && !isWoodBlock(name)) continue;
+
+                    // ── 优先级计算 ──
+                    int score = DEFAULT_PRIORITY.getOrDefault(name, 0);
+
+                    // 玩家自定义优先级：匹配到的 +50 分（保证排在默认优先级之前）
+                    if (!priorities.isEmpty()) {
+                        for (String pRes : priorities) {
+                            if (name.contains(pRes.toLowerCase())) {
+                                score += 50;
+                                break;
+                            }
+                        }
+                    }
+
                     if (score <= 0) continue;
 
                     double dist = origin.distSqr(p);
@@ -233,6 +284,19 @@ public class BTreeGatherGoal extends Goal {
             }
         }
         return best;
+    }
+
+    /** 判断是否为矿石类方块 */
+    private static boolean isOreBlock(String name) {
+        return name.contains("_ore") || name.equals("ancient_debris")
+            || name.equals("gilded_blackstone");
+    }
+
+    /** 判断是否为木材类方块 */
+    private static boolean isWoodBlock(String name) {
+        return name.contains("_log") || name.endsWith("_wood")
+            || name.equals("oak_wood") || name.equals("birch_wood")
+            || name.equals("spruce_wood");
     }
 
     // ==================== Condition 辅助类 ====================

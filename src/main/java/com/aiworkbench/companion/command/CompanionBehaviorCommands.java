@@ -16,6 +16,22 @@ import net.minecraft.server.level.ServerPlayer;
  */
 public class CompanionBehaviorCommands {
 
+    private static final List<String> COMMON_GATHER_TARGETS = List.of(
+        "minecraft:iron_ore", "minecraft:deepslate_iron_ore",
+        "minecraft:coal_ore", "minecraft:deepslate_coal_ore",
+        "minecraft:copper_ore", "minecraft:deepslate_copper_ore",
+        "minecraft:diamond_ore", "minecraft:deepslate_diamond_ore",
+        "minecraft:emerald_ore", "minecraft:deepslate_emerald_ore",
+        "minecraft:gold_ore", "minecraft:deepslate_gold_ore",
+        "minecraft:lapis_ore", "minecraft:deepslate_lapis_ore",
+        "minecraft:redstone_ore", "minecraft:deepslate_redstone_ore",
+        "minecraft:ancient_debris", "minecraft:nether_gold_ore",
+        "minecraft:nether_quartz_ore",
+        "minecraft:oak_log", "minecraft:birch_log", "minecraft:spruce_log",
+        "minecraft:jungle_log", "minecraft:acacia_log", "minecraft:dark_oak_log",
+        "minecraft:stone", "minecraft:deepslate", "minecraft:sand", "minecraft:gravel"
+    );
+
     public static void register(LiteralArgumentBuilder<CommandSourceStack> parent) {
         parent.then(Commands.literal("guard")
                         .executes(ctx -> toggleGuard(ctx.getSource())))
@@ -32,7 +48,20 @@ public class CompanionBehaviorCommands {
                         .then(Commands.literal("priority")
                                 .then(Commands.argument("resources", StringArgumentType.greedyString())
                                         .executes(ctx -> setGatherPriority(ctx.getSource(),
-                                                StringArgumentType.getString(ctx, "resources"))))))
+                                                StringArgumentType.getString(ctx, "resources")))))
+                        .then(Commands.literal("target")
+                                .then(Commands.argument("block", StringArgumentType.word())
+                                        .suggests((ctx, builder) -> {
+                                            for (String id : COMMON_GATHER_TARGETS) {
+                                                String remaining = builder.getRemaining().toLowerCase();
+                                                if (id.contains(remaining)) builder.suggest(id);
+                                            }
+                                            return builder.buildFuture();
+                                        })
+                                        .executes(ctx -> setGatherTarget(ctx.getSource(),
+                                                StringArgumentType.getString(ctx, "block")))))
+                        .then(Commands.literal("info")
+                                .executes(ctx -> showGatherInfo(ctx.getSource()))))
                 .then(Commands.literal("farm")
                         .executes(ctx -> toggleFarm(ctx.getSource())))
                 .then(Commands.literal("mine")
@@ -303,6 +332,49 @@ public class CompanionBehaviorCommands {
 
         companion.setGatherPriority(resources);
         source.sendSuccess(() -> Component.literal("§e优先采集: " + resources), true);
+        return 1;
+    }
+
+    private static int setGatherTarget(CommandSourceStack source, String blockId) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) { source.sendFailure(Component.literal("必须由玩家执行")); return 0; }
+
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("你没有同伴"));
+            return 0;
+        }
+
+        companion.setGatherTargetBlock(blockId);
+        source.sendSuccess(() -> Component.literal("§e🎯 指定采集目标: " + blockId), true);
+        return 1;
+    }
+
+    private static int showGatherInfo(CommandSourceStack source) {
+        ServerPlayer player = source.getPlayer();
+        if (player == null) { source.sendFailure(Component.literal("必须由玩家执行")); return 0; }
+
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("你没有同伴"));
+            return 0;
+        }
+
+        String filter = companion.getGatherFilter();
+        String target = companion.getGatherTargetBlock();
+        java.util.Set<String> priorities = companion.getGatherPriorityResources();
+        String filterDesc = switch (filter) {
+            case "ores" -> "仅矿石";
+            case "wood" -> "仅木材";
+            default -> "全部资源";
+        };
+        String targetDesc = (target != null && !target.isEmpty()) ? target : "无";
+        String priorityDesc = priorities.isEmpty() ? "默认" : String.join(", ", priorities);
+
+        source.sendSuccess(() -> Component.literal("§6⛏ 采集配置"), false);
+        source.sendSuccess(() -> Component.literal("  §e类型: §f" + filterDesc), false);
+        source.sendSuccess(() -> Component.literal("  §e目标: §f" + targetDesc), false);
+        source.sendSuccess(() -> Component.literal("  §e优先级: §f" + priorityDesc), false);
         return 1;
     }
 

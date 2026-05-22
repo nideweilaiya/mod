@@ -1,16 +1,16 @@
 package com.aiworkbench.companion.entity;
 
 import com.aiworkbench.companion.AICompanionMod;
-import net.minecraft.core.registries.Registries;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.MobCategory;
 import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.registries.DeferredRegister;
+import net.minecraftforge.registries.ForgeRegistries;
 import net.minecraftforge.registries.RegistryObject;
 
 public class EntityInit {
     public static final DeferredRegister<EntityType<?>> ENTITY_TYPES =
-        DeferredRegister.create(Registries.ENTITY_TYPE, AICompanionMod.MODID);
+        DeferredRegister.create(ForgeRegistries.ENTITY_TYPES, AICompanionMod.MODID);
 
     public static final RegistryObject<EntityType<AutomatonEntity>> AUTOMATON =
         ENTITY_TYPES.register("automaton", () ->

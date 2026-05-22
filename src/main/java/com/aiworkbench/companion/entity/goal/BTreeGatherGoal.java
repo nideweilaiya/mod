@@ -3,6 +3,8 @@ package com.aiworkbench.companion.entity.goal;
 import com.aiworkbench.companion.AICompanionMod;
 import com.aiworkbench.companion.btree.BehaviorNode;
 import com.aiworkbench.companion.entity.AutomatonEntity;
+import com.aiworkbench.companion.skill.atomic.BlockMatcher;
+import com.aiworkbench.companion.skill.atomic.BreakBlockAction;
 import com.aiworkbench.companion.task.Navigator;
 import com.aiworkbench.companion.task.TaskTarget;
 import org.jetbrains.annotations.Nullable;
@@ -36,8 +38,8 @@ public class BTreeGatherGoal extends Goal {
     private final BehaviorNode behaviorTree;
     private TaskTarget currentTarget;
 
-    // ── 技能缓存：只创建一次，不每 tick 重建 ──
-    private com.aiworkbench.companion.skill.Skill plannedSkill;
+    // ── 直接挖掘：不依赖 LLM/skill 匹配 ──
+    private com.aiworkbench.companion.skill.atomic.BreakBlockAction blockBreaker;
 
     // ── 完成冷却 ──
     private int completionCooldown = 0;
@@ -97,12 +99,11 @@ public class BTreeGatherGoal extends Goal {
 
     @Override public void start() {
         AICompanionMod.LOGGER.info("[BTreeGather] Started: {}", currentTarget);
-        plannedSkill = null;  // 重置技能缓存
+        blockBreaker = null;
         behaviorTree.onStart(companion, currentTarget);
     }
 
     @Override public void tick() {
-        // 冷却倒计时
         if (completionCooldown > 0) {
             completionCooldown--;
             return;
@@ -113,23 +114,27 @@ public class BTreeGatherGoal extends Goal {
             if (currentTarget == null) return;
         }
 
-        // 执行行为树
         BehaviorNode.Status status = behaviorTree.tick(companion, currentTarget);
         if (status == BehaviorNode.Status.SUCCESS) {
-            // 完成→冷却→再扫描
             completionCooldown = COMPLETION_COOLDOWN_TICKS;
-            plannedSkill = null;  // 清除技能缓存
-            currentTarget = null; // 先置空，冷却结束后 canUse() 重新扫描
+            blockBreaker = null;
+            currentTarget = null;
             companion.setActionText("⛏ 采集完成");
+        } else if (status == BehaviorNode.Status.FAILURE) {
+            // 失败 → 放弃当前目标，短冷却后重新扫描
+            completionCooldown = COMPLETION_COOLDOWN_TICKS / 2;
+            blockBreaker = null;
+            currentTarget = null;
+            AICompanionMod.LOGGER.info("[BTreeGather] Target failed, will rescan");
         }
     }
 
     @Override public void stop() {
         navigator.stop();
-        if (plannedSkill != null && companion.getSkillEngine().isActive()) {
-            companion.getSkillEngine().cancelSkill(companion);
+        if (blockBreaker != null) {
+            blockBreaker.stop(companion);
+            blockBreaker = null;
         }
-        plannedSkill = null;
         currentTarget = null;
         completionCooldown = 0;
     }
@@ -163,34 +168,32 @@ public class BTreeGatherGoal extends Goal {
         BlockPos pos = target.getPosition();
         if (pos == null) return BehaviorNode.Status.FAILURE;
 
-        // ── 技能缓存：只创建一次，不每 tick 重建 ──
-        if (!companion.getSkillEngine().isActive()) {
-            if (plannedSkill == null) {
-                // 只有第一次才调用 planTask（LLM 调用）
-                String blockName = target.getTargetId().split(":")[1].replace("minecraft/", "");
-                plannedSkill = companion.planTask("mine " + blockName);
-                if (plannedSkill == null) {
-                    AICompanionMod.LOGGER.warn("[BTreeGather] Failed to plan skill for {}", blockName);
-                    return BehaviorNode.Status.FAILURE;
-                }
-                AICompanionMod.LOGGER.info("[BTreeGather] Planned skill: {}", plannedSkill.getName());
-            }
-            // 使用缓存的技能启动
-            if (companion.getSkillEngine().startSkill(plannedSkill, companion)) {
-                AICompanionMod.LOGGER.info("[BTreeGather] Started skill: {}", plannedSkill.getName());
-            } else {
-                // 技能启动失败（如无可用动作）
-                plannedSkill = null;
-                return BehaviorNode.Status.FAILURE;
-            }
-        }
-        // 等待技能完成
-        if (companion.getSkillEngine().isActive()) {
+        // 确保够近
+        double distSq = entity.distanceToSqr(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
+        if (distSq > 9.0) {
+            navigator.navigateTo(pos, 1.0);
             return BehaviorNode.Status.RUNNING;
         }
-        // 技能执行完毕
-        plannedSkill = null;
-        return BehaviorNode.Status.SUCCESS;
+        navigator.stop();
+
+        // 目标已消失
+        if (entity.level().getBlockState(pos).isAir()) {
+            return BehaviorNode.Status.SUCCESS;
+        }
+
+        // 直接使用 BreakBlockAction，不走 LLM 技能匹配
+        if (blockBreaker == null) {
+            String blockName = target.getTargetId();
+            String shortName = blockName.contains(":") ? blockName.split(":")[1] : blockName;
+            blockBreaker = new BreakBlockAction(BlockMatcher.contains(shortName));
+            blockBreaker.setTaskTarget(target);
+        }
+
+        if (blockBreaker.tick(entity)) {
+            blockBreaker = null;
+            return BehaviorNode.Status.SUCCESS;
+        }
+        return BehaviorNode.Status.RUNNING;
     }
 
     private BehaviorNode.Status collectItems(AutomatonEntity entity, TaskTarget target) {

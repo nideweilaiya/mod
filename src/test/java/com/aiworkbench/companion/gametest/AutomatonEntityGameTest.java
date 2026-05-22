@@ -25,14 +25,8 @@ public class AutomatonEntityGameTest {
      */
     @GameTest
     public static void testEntityMobCategory(GameTestHelper helper) {
-        // 获取实体的注册信息
-        var registry = helper.getLevel().registryAccess()
-            .registry(net.minecraft.core.registries.Registries.ENTITY_TYPE).orElse(null);
-
-        if (registry == null) {
-            helper.fail("无法获取实体类型注册表");
-            return;
-        }
+        // 获取实体的注册信息（直接使用 BuiltInRegistries，1.20.4 兼容）
+        var registry = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE;
 
         var entityType = registry.get(
             new net.minecraft.resources.ResourceLocation("aicompanion:automaton")

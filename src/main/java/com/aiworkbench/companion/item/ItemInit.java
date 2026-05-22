@@ -1,10 +1,10 @@
 package com.aiworkbench.companion.item;
 
 import com.aiworkbench.companion.AICompanionMod;
-import net.minecraft.core.registries.Registries;
 import net.minecraft.world.item.Item;
 import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.registries.DeferredRegister;
+import net.minecraftforge.registries.ForgeRegistries;
 import net.minecraftforge.registries.RegistryObject;
 
 /**
@@ -12,7 +12,7 @@ import net.minecraftforge.registries.RegistryObject;
  */
 public class ItemInit {
     public static final DeferredRegister<Item> ITEMS =
-        DeferredRegister.create(Registries.ITEM, AICompanionMod.MODID);
+        DeferredRegister.create(ForgeRegistries.ITEMS, AICompanionMod.MODID);
 
     public static final RegistryObject<Item> COMPANION_CORE =
         ITEMS.register("companion_core", () ->

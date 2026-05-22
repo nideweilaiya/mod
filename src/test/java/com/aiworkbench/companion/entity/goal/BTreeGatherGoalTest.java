@@ -5,9 +5,9 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.Test;
 
 /**
- * 验证 BTreeGatherGoal v2.1 的关键改动:
+ * 验证 BTreeGatherGoal v2.2 的关键改动:
  * 1. 冷却机制: COMPLETION_COOLDOWN_TICKS = 60
- * 2. 技能缓存: plannedSkill 字段存在
+ * 2. 直接挖掘: blockBreaker (BreakBlockAction) 取代 plannedSkill
  * 3. 冷却倒计时: completionCooldown 字段存在
  */
 public class BTreeGatherGoalTest {
@@ -21,12 +21,12 @@ public class BTreeGatherGoalTest {
     }
 
     @Test
-    void testPlannedSkillFieldExists() throws Exception {
-        // 验证 plannedSkill 字段类型为 Skill
-        var field = BTreeGatherGoal.class.getDeclaredField("plannedSkill");
-        assertNotNull(field, "plannedSkill 字段应存在");
-        assertEquals("com.aiworkbench.companion.skill.Skill",
-            field.getType().getName(), "plannedSkill 类型应为 Skill");
+    void testBlockBreakerFieldExists() throws Exception {
+        // v2.2: 用 BreakBlockAction 直接挖掘，不再依赖 LLM 技能匹配
+        var field = BTreeGatherGoal.class.getDeclaredField("blockBreaker");
+        assertNotNull(field, "blockBreaker 字段应存在");
+        assertEquals("com.aiworkbench.companion.skill.atomic.BreakBlockAction",
+            field.getType().getName(), "blockBreaker 类型应为 BreakBlockAction");
     }
 
     @Test
@@ -54,7 +54,7 @@ public class BTreeGatherGoalTest {
     }
 
     @Test
-    void testStopCancelsPlannedSkill() throws Exception {
+    void testStopCancelsBlockBreaker() throws Exception {
         var method = BTreeGatherGoal.class.getDeclaredMethod("stop");
         assertNotNull(method, "stop 方法应存在");
     }

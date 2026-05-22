@@ -10,6 +10,7 @@
   "key.aicompanion.control_menu": "Open Control Menu",
   "key.aicompanion.skill_screen": "Open Skill Library",
   "key.aicompanion.chat_mode": "Toggle Chat Mode (Direct Chat)",
+  "key.aicompanion.gather_panel": "Open Gather Control Panel",
   "gui.aicompanion.title": "AI Companion",
   "gui.aicompanion.loading": "Loading...",
   "gui.aicompanion.no_companions": "No companions available",

@@ -46,6 +46,13 @@ public class CompanionQuickMenuScreen extends Screen {
         ).bounds(cx - btnW/2, y, btnW, btnH).build());
         y += btnH + gap;
 
+        // 采集设置（打开控制面板）
+        addRenderableWidget(Button.builder(
+            Component.literal("§e⚙ 采集设置"),
+            btn -> { this.minecraft.setScreen(new GatherControlScreen(this)); }
+        ).bounds(cx - btnW/2, y, btnW, btnH).build());
+        y += btnH + gap;
+
         // 种植模式
         addRenderableWidget(Button.builder(
             Component.literal(farming ? "§a🌾 种植中" : "§7🌾 开始种植"),

@@ -36,8 +36,9 @@ public class CompanionKeyHandler {
     public static final String KEY_SKILL_SCREEN = "key.aicompanion.skill_screen";
     public static final String KEY_CHAT_MODE = "key.aicompanion.chat_mode";
     public static final String KEY_CONFIRM = "key.aicompanion.confirm";
+    public static final String KEY_GATHER_PANEL = "key.aicompanion.gather_panel";
 
-    // Keys: C=list, G=settings, B=backpack, K=teleport, V=follow toggle, ESC=cancel task, H=HUD, N=menu, P=skills, J=chat mode
+    // Keys: C=list, G=quick, B=backpack, K=teleport, V=follow, Z=cancel, H=HUD, N=menu, P=skills, J=chat, M=gather
     public static final KeyMapping OPEN_LIST_KEY = new KeyMapping(
         KEY_OPEN_GUI,
         GLFW.GLFW_KEY_C,
@@ -110,6 +111,13 @@ public class CompanionKeyHandler {
         CATEGORY
     );
 
+    // M键 - 打开采集控制面板
+    public static final KeyMapping GATHER_PANEL_KEY = new KeyMapping(
+        KEY_GATHER_PANEL,
+        GLFW.GLFW_KEY_M,
+        CATEGORY
+    );
+
     // Cooldown tracking (client-side)
     private static final long TELEPORT_COOLDOWN_MS = 60000; // 1 minute
     private static long lastTeleportTime = 0;
@@ -128,6 +136,7 @@ public class CompanionKeyHandler {
             event.register(CONTROL_MENU_KEY);
             event.register(SKILL_SCREEN_KEY);
             event.register(CHAT_MODE_KEY);
+            event.register(GATHER_PANEL_KEY);
         }
     }
 
@@ -210,6 +219,11 @@ public class CompanionKeyHandler {
             if (SKILL_SCREEN_KEY.consumeClick()) {
                 mc.setScreen(new SkillScreen(null));
                 AICompanionMod.LOGGER.info("[KeyHandler] P key pressed: opening skill screen");
+            }
+
+            // M 键 - 打开采集控制面板
+            if (GATHER_PANEL_KEY.consumeClick()) {
+                mc.setScreen(new com.aiworkbench.companion.client.gui.GatherControlScreen(null));
             }
 
             // J 键 - 切换聊天模式

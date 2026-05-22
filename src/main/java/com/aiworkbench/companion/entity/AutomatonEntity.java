@@ -785,6 +785,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
 
         // Decrement cooldowns
         if (modeToggleCooldown > 0) modeToggleCooldown--;
+        scheduler.tickCooldown(); // v3.0: 调度器防抖冷却
         if (stopToggleCooldown > 0) stopToggleCooldown--;
 
         // Patrol behavior - wander around patrol center

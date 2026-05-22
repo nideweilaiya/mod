@@ -263,6 +263,16 @@ public class PlayerEventHandler {
                 companion != null ? companion.getUUID().toString() : ""
             );
         }
+
+        // P0修复: 玩家登出时自动切回跟随模式，防止同伴在世界无玩家时继续采集
+        var companion = AICompanionMod.companionManager.getCompanion(playerId);
+        if (companion != null && companion.isAlive()) {
+            if (companion.isGatherModeEnabled() || companion.isGuardModeEnabled()
+                    || companion.isFarmModeEnabled()) {
+                companion.returnToFollow();
+                AICompanionMod.LOGGER.info("[Logout] Companion returned to FOLLOW mode for player {}", playerId);
+            }
+        }
     }
 
     // ==================== 持久化 NBT 标签 ====================

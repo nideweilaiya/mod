@@ -124,6 +124,8 @@ public class BTreeGatherGoal extends Goal {
     @Override public void start() {
         AICompanionMod.LOGGER.info("[BTreeGather] Started: {}", currentTarget);
         blockBreaker = null;
+        cachedTarget = null;
+        scanTimer = 0;
         behaviorTree.onStart(companion, currentTarget);
     }
 
@@ -143,12 +145,13 @@ public class BTreeGatherGoal extends Goal {
             completionCooldown = COMPLETION_COOLDOWN_TICKS;
             blockBreaker = null;
             currentTarget = null;
+            cachedTarget = null;
             companion.setActionText("⛏ 采集完成");
         } else if (status == BehaviorNode.Status.FAILURE) {
-            // 失败 → 放弃当前目标，短冷却后重新扫描
             completionCooldown = COMPLETION_COOLDOWN_TICKS / 2;
             blockBreaker = null;
             currentTarget = null;
+            cachedTarget = null;
             AICompanionMod.LOGGER.info("[BTreeGather] Target failed, will rescan");
         }
     }
@@ -160,6 +163,8 @@ public class BTreeGatherGoal extends Goal {
             blockBreaker = null;
         }
         currentTarget = null;
+        cachedTarget = null;
+        scanTimer = 0;
         completionCooldown = 0;
     }
 
@@ -227,17 +232,26 @@ public class BTreeGatherGoal extends Goal {
 
     // ==================== 扫描 ====================
 
+    // 扫描缓存：降频扫描，每 SCAN_INTERVAL tick 才重新扫描
+    private int scanTimer = 0;
+    private static final int SCAN_INTERVAL = 20; // 每秒扫描一次
+    @Nullable private TaskTarget cachedTarget;
+
     @Nullable
     private TaskTarget scan() {
+        // 降频：有缓存目标时每 SCAN_INTERVAL tick 才重新扫描
+        scanTimer++;
+        if (cachedTarget != null && scanTimer < SCAN_INTERVAL) return cachedTarget;
+        scanTimer = 0;
+
         Level level = companion.level();
         BlockPos origin = companion.blockPosition();
-        String filter = companion.getGatherFilter();               // "all", "ores", "wood"
+        String filter = companion.getGatherFilter();
         java.util.Set<String> priorities = companion.getGatherPriorityResources();
-        String targetBlock = companion.getGatherTargetBlock();     // 如 "minecraft:iron_ore"
+        String targetBlock = companion.getGatherTargetBlock();
 
-        TaskTarget best = null;
-        int bestScore = 0;
-        double bestDist = Double.MAX_VALUE;
+        // 分批收集：按优先级分组排序候选
+        java.util.List<Candidate> candidates = new java.util.ArrayList<>();
 
         for (int dx = -SCAN_RADIUS; dx <= SCAN_RADIUS; dx++) {
             for (int dy = SCAN_Y_MIN; dy <= SCAN_Y_MAX; dy++) {
@@ -250,19 +264,14 @@ public class BTreeGatherGoal extends Goal {
                     String name = state.getBlock().builtInRegistryHolder().key().location().getPath();
                     String fullId = state.getBlock().builtInRegistryHolder().key().location().toString();
 
-                    // ── 指定目标过滤 ──
                     if (targetBlock != null && !targetBlock.isEmpty()) {
                         if (!fullId.equals(targetBlock)) continue;
                     }
 
-                    // ── 类型过滤 ──
                     if ("ores".equals(filter) && !isOreBlock(name)) continue;
                     if ("wood".equals(filter) && !isWoodBlock(name)) continue;
 
-                    // ── 优先级计算 ──
                     int score = DEFAULT_PRIORITY.getOrDefault(name, 0);
-
-                    // 玩家自定义优先级：匹配到的 +50 分（保证排在默认优先级之前）
                     if (!priorities.isEmpty()) {
                         for (String pRes : priorities) {
                             if (name.contains(pRes.toLowerCase())) {
@@ -271,19 +280,59 @@ public class BTreeGatherGoal extends Goal {
                             }
                         }
                     }
-
                     if (score <= 0) continue;
 
+                    // P0修复: 可达性预检 — 目标必须有至少一面暴露在空气中
+                    if (!isExposed(level, p)) continue;
+
                     double dist = origin.distSqr(p);
-                    if (score > bestScore || (score == bestScore && dist < bestDist)) {
-                        bestScore = score;
-                        bestDist = dist;
-                        best = TaskTarget.fromBlockState(p, state);
-                    }
+                    candidates.add(new Candidate(p, state, score, dist));
                 }
             }
         }
-        return best;
+
+        // 按 score 降序 → dist 升序 排列
+        candidates.sort((a, b) -> {
+            if (b.score != a.score) return Integer.compare(b.score, a.score);
+            return Double.compare(a.dist, b.dist);
+        });
+
+        // 取最优可达候选，做路径预检
+        int checked = 0;
+        for (Candidate c : candidates) {
+            if (checked >= 5) break; // 最多检查前5个候选
+            checked++;
+
+            // 简单路径预检：验证寻路系统能否到达目标附近
+            var path = companion.getNavigation().createPath(
+                c.pos.getX(), c.pos.getY(), c.pos.getZ(), 0);
+            if (path != null && path.canReach()) {
+                cachedTarget = TaskTarget.fromBlockState(c.pos, c.state);
+                return cachedTarget;
+            }
+        }
+
+        cachedTarget = null;
+        return null;
+    }
+
+    /** 检查方块是否有至少一面暴露在空气中（可被交互） */
+    private static boolean isExposed(Level level, BlockPos pos) {
+        for (var dir : net.minecraft.core.Direction.values()) {
+            if (level.getBlockState(pos.relative(dir)).isAir()) return true;
+        }
+        return false;
+    }
+
+    /** 扫描候选方块（排序前临时存储） */
+    private static class Candidate {
+        final BlockPos pos;
+        final BlockState state;
+        final int score;
+        final double dist;
+        Candidate(BlockPos p, BlockState s, int sc, double d) {
+            pos = p; state = s; score = sc; dist = d;
+        }
     }
 
     /** 判断是否为矿石类方块 */

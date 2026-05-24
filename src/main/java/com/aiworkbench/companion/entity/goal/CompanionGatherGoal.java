@@ -452,24 +452,31 @@ public class CompanionGatherGoal extends Goal {
         return true;
     }
 
-    /** 在背包中找一个可用来搭建的廉价方块 */
+    /** 在背包中找一个可用来搭建的廉价方块（排除矿石，不浪费资源） */
     private int findBuildBlock() {
         for (int i = 0; i < companion.getInventorySize(); i++) {
             ItemStack stack = companion.getItem(i);
             if (stack.isEmpty() || !(stack.getItem() instanceof BlockItem)) continue;
-            if (stack.getCount() < 2) continue; // 至少保留一个
+            if (stack.getCount() < 2) continue;
             String name = stack.getItem().builtInRegistryHolder().key().location().getPath();
+            // 排除矿石类方块 — 不能拿矿石当建材
+            if (name.contains("_ore") || name.contains("ancient_debris")
+                || name.contains("gilded_blackstone")) continue;
             // 优先用廉价方块
             if (name.contains("dirt") || name.contains("cobblestone")
                 || name.contains("netherrack") || name.contains("sandstone")
                 || name.contains("planks"))
                 return i;
         }
-        // 其次任意方块
+        // 其次任意非矿石方块
         for (int i = 0; i < companion.getInventorySize(); i++) {
             ItemStack stack = companion.getItem(i);
-            if (!stack.isEmpty() && stack.getItem() instanceof BlockItem && stack.getCount() >= 2)
-                return i;
+            if (stack.isEmpty() || !(stack.getItem() instanceof BlockItem)) continue;
+            if (stack.getCount() < 2) continue;
+            String name = stack.getItem().builtInRegistryHolder().key().location().getPath();
+            if (name.contains("_ore") || name.contains("ancient_debris")
+                || name.contains("gilded_blackstone")) continue;
+            return i;
         }
         return -1;
     }

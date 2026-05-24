@@ -253,6 +253,8 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     // ==================== Skill Engine ====================
     private final SkillEngine skillEngine = new SkillEngine();
     private volatile boolean skillActive = false;
+    // v2.4.1: 采集活跃标志（BTreeGatherGoal 设置），抑制对话打断
+    volatile boolean activelyGathering = false;
 
     // ==================== AutoCurriculum / Autonomous Mode ====================
     private CompanionRole companionRole = CompanionRole.GENERAL;
@@ -913,15 +915,17 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             }
         }
 
-        // AutoCurriculum evaluation — 仅在非战斗、非技能执行时评估（服务端）
-        if (!this.level().isClientSide && !isSkillActive() && isAlive() && getOwner() != null) {
+        // AutoCurriculum evaluation — 仅在非战斗、非技能执行、非采集活跃时评估（服务端）
+        if (!this.level().isClientSide && !isSkillActive() && isAlive() && getOwner() != null
+            && !isActivelyMining()) {
             curriculumTickCounter++;
             if (curriculumTickCounter >= CURRICULUM_EVAL_INTERVAL) {
                 curriculumTickCounter = 0;
                 evaluateCurriculum();
             }
-            // LLM 采集战略 — 采集模式下每30秒获取一次LLM战略指导
-            if (isGatherModeEnabled() && curriculumTickCounter == CURRICULUM_EVAL_INTERVAL / 2) {
+            // LLM 采集战略 — 采集模式下每30秒获取一次LLM战略指导（仅空闲时）
+            if (isGatherModeEnabled() && curriculumTickCounter == CURRICULUM_EVAL_INTERVAL / 2
+                && !isActivelyMining()) {
                 evaluateGatherStrategyAsync();
             }
         }
@@ -1267,9 +1271,9 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         if (owner != null && this.distanceToSqr(owner) > 6.25) {
             shouldSprint = true;
         }
-        // 战斗/采集/种植模式中自动疾跑
+        // 战斗/采集/种植模式中自动疾跑（只在导航移动时，避免站桩跑步粒子）
         if (isGuardModeEnabled() || isGatherModeEnabled() || isFarmModeEnabled()) {
-            shouldSprint = true;
+            shouldSprint = !this.getNavigation().isDone();
         }
         this.setSprinting(shouldSprint);
         speedAttr.setBaseValue(shouldSprint ? baseSpeed * 1.3 : baseSpeed);
@@ -2460,6 +2464,15 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     // v3.0: 委托给 CapabilityScheduler，保持旧方法签名兼容
     public boolean isGuardModeEnabled()   { return scheduler.isActive(CapabilityFlags.GUARD); }
     public boolean isGatherModeEnabled()  { return scheduler.isActive(CapabilityFlags.GATHER); }
+
+    /** 同伴是否正在执行采集动作（导航中或挖掘中），用于抑制对话打断 */
+    public boolean isActivelyMining() {
+        return activelyGathering;
+    }
+
+    public void setActivelyGathering(boolean active) {
+        this.activelyGathering = active;
+    }
     public boolean isFarmModeEnabled()    { return scheduler.isActive(CapabilityFlags.FARM); }
     public boolean isFollowModeActive()   { return scheduler.isActive(CapabilityFlags.FOLLOW); }
     public boolean isPatrolModeEnabled()  { return scheduler.isActive(CapabilityFlags.PATROL); }

@@ -5,10 +5,10 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.Test;
 
 /**
- * 验证 BTreeGatherGoal v2.2 的关键改动:
- * 1. 冷却机制: COMPLETION_COOLDOWN_TICKS = 60
+ * 验证 BTreeGatherGoal v2.3 的关键改动:
+ * 1. 冷却机制: COMPLETION_COOLDOWN_TICKS = 60, 改用 cooldownUntil (gameTime)
  * 2. 直接挖掘: blockBreaker (BreakBlockAction) 取代 plannedSkill
- * 3. 冷却倒计时: completionCooldown 字段存在
+ * 3. 排障追踪: pendingResource 字段存在
  */
 public class BTreeGatherGoalTest {
 
@@ -30,10 +30,11 @@ public class BTreeGatherGoalTest {
     }
 
     @Test
-    void testCompletionCooldownFieldExists() throws Exception {
-        var field = BTreeGatherGoal.class.getDeclaredField("completionCooldown");
-        assertNotNull(field, "completionCooldown 字段应存在");
-        assertEquals(int.class, field.getType(), "completionCooldown 类型应为 int");
+    void testCooldownUsesGameTime() throws Exception {
+        // v2.3: cooldownUntil 使用 gameTime，不再用 completionCooldown 字段
+        var field = BTreeGatherGoal.class.getDeclaredField("cooldownUntil");
+        assertNotNull(field, "cooldownUntil 字段应存在（v2.3: gameTime 冷却）");
+        assertEquals(long.class, field.getType(), "cooldownUntil 类型应为 long");
     }
 
     @Test

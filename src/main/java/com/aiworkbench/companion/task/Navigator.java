@@ -45,13 +45,18 @@ public class Navigator {
         this.currentTarget = target;
 
         PathNavigation nav = entity.getNavigation();
-        boolean started = nav.moveTo(target.getX(), target.getY(), target.getZ(), speed);
+        return nav.moveTo(target.getX(), target.getY(), target.getZ(), speed);
+    }
 
-        if (!started) {
-            // 寻路失败 -> 尝试简化
-            return nav.moveTo(target.getX(), target.getY(), target.getZ(), speed * 0.5);
-        }
-        return true;
+    /**
+     * 导航到目标正下方的可站立位置（用于高温方块，避免寻路到空中）。
+     * 只在目标 Y > 实体 Y+1 时使用。
+     */
+    public boolean navigateToGroundBelow(BlockPos target, double speed) {
+        int entityY = entity.blockPosition().getY();
+        BlockPos groundTarget = new BlockPos(target.getX(), entityY, target.getZ());
+        this.currentTarget = groundTarget;
+        return entity.getNavigation().moveTo(groundTarget.getX(), groundTarget.getY(), groundTarget.getZ(), speed);
     }
 
     /**

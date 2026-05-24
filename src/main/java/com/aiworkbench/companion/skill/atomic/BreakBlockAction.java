@@ -23,7 +23,7 @@ import java.util.List;
  */
 public class BreakBlockAction implements AtomicAction {
 
-    private static final double BREAK_DISTANCE_SQ = 3.0 * 3.0;
+    private static final double BREAK_DISTANCE_SQ = 4.5 * 4.5; // 匹配玩家生存挖掘距离
     private static final float BASE_BREAK_TICKS_PER_HARDNESS = 30f;
     private static final int SEARCH_RADIUS = 12;
     private static final int TIMEOUT_TICKS = 600;

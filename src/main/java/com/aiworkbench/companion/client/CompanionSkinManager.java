@@ -49,7 +49,7 @@ public class CompanionSkinManager {
 
         try {
             if (skinFile.exists() && skinFile.isFile()) {
-                ResourceLocation rl = ResourceLocation.fromNamespaceAndPath("aicompanion", "skin/" + skinId);
+                ResourceLocation rl = new ResourceLocation("aicompanion", "skin/" + skinId);
                 DynamicTexture tex = new DynamicTexture(NativeImage.read(Files.readAllBytes(skinFile.toPath())));
                 mc.getTextureManager().register(rl, tex);
                 skinCache.put(skinId, rl);
@@ -64,7 +64,7 @@ public class CompanionSkinManager {
 
     /** 获取默认同伴皮肤 (Steve slim) */
     public static ResourceLocation getDefaultSkin() {
-        return ResourceLocation.fromNamespaceAndPath("minecraft", "textures/entity/player/slim/steve.png");
+        return new ResourceLocation("minecraft", "textures/entity/player/slim/steve.png");
     }
 
     /** 列出皮肤目录下所有可用皮肤 */

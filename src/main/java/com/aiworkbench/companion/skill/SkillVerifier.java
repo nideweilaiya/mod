@@ -136,6 +136,7 @@ public class SkillVerifier {
     }
 
     private static String callLLM(String prompt, String model) {
+        if (com.aiworkbench.companion.AICompanionMod.LLM_DISABLED) return null;
         java.util.LinkedHashMap<String, Object> opts = new java.util.LinkedHashMap<>();
         opts.put("temperature", OllamaClient.TEMP_PRECISE);
         opts.put("num_predict", 200);

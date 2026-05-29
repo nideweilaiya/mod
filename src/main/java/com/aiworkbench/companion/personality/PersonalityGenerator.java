@@ -42,6 +42,10 @@ public class PersonalityGenerator {
 
         CompletableFuture.runAsync(() -> {
             try {
+                if (com.aiworkbench.companion.AICompanionMod.LLM_DISABLED) {
+                    callback.accept(fallbackPersonality(description));
+                    return;
+                }
                 LinkedHashMap<String, Object> opts = new LinkedHashMap<>();
                 opts.put("temperature", OllamaClient.TEMP_BALANCED);
                 opts.put("num_predict", 150);

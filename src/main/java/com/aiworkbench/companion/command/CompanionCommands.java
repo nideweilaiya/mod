@@ -44,6 +44,9 @@ public class CompanionCommands {
         // Skill system subcommands
         SkillCommand.register(base);
 
+        // Core framework debug (P0-P5 closed-loop test)
+        CoreDebugCommands.register(base);
+
         // Quick control menu (no OP required)
         base.then(Commands.literal("menu")
                 .executes(ctx -> sendControlMenu(ctx.getSource())));

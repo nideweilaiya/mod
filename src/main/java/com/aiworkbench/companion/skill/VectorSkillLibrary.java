@@ -72,6 +72,7 @@ public class VectorSkillLibrary {
      * @return 向量列表，失败返回空列表
      */
     public List<Double> generateEmbedding(String text) {
+        if (AICompanionMod.LLM_DISABLED) return Collections.emptyList();
         if (text == null || text.isBlank()) {
             AICompanionMod.LOGGER.warn("[VectorSkillLib] Cannot generate embedding for empty text");
             return Collections.emptyList();

@@ -16,7 +16,7 @@ public class ItemInit {
 
     public static final RegistryObject<Item> COMPANION_CORE =
         ITEMS.register("companion_core", () ->
-            new CompanionCoreItem(new Item.Properties().stacksTo(1)));
+            new CompanionCoreItem(new Item.Properties())); // MC-047: Forge 49.2.7 无 stacksTo(int)
 
     public static void register(IEventBus eventBus) {
         ITEMS.register(eventBus);

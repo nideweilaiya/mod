@@ -1,0 +1,34 @@
+{
+  "id": "gather_ores",
+  "name": "采集矿石",
+  "need": "ore",
+  "block_keywords": ["_ore", "deepslate_", "raw_"],
+  "action_sequence": [
+    {
+      "action": "EquipItem",
+      "params": { "keyword": "pickaxe" }
+    },
+    {
+      "action": "NavigateToInteract",
+      "params": { "target": "$found_block.pos" }
+    },
+    {
+      "action": "repeat",
+      "condition": { "block_matches": "_ore" },
+      "body": [
+        {
+          "action": "BreakBlock",
+          "params": { "target": "$current_target" }
+        },
+        {
+          "action": "PickupItem",
+          "params": { "item_filter": "" }
+        },
+        {
+          "action": "MoveUpTarget",
+          "params": {}
+        }
+      ]
+    }
+  ]
+}

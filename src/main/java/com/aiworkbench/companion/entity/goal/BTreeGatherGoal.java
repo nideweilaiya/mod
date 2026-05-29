@@ -65,9 +65,25 @@ public class BTreeGatherGoal extends Goal {
     private BlockPos lastStuckCheckPos;
     private static final int MAX_STUCK_TICKS = 60;
 
+    // MC-039: BreakBlockAction静默卡住检测
+    private int breakerStuckTicks = 0;
+    private static final int MAX_BREAKER_STUCK = 60; // 3秒无进度→重新射线检测
+
     // ── v2.4: 树模式 ──
     private boolean treeMode = false;
     @Nullable private BlockPos treeBasePos;
+
+    // ── v2.5.3: BFS全树扫描 ──
+    private final List<BlockPos> cutList = new ArrayList<>();       // 全树木头列表(Y升序)
+    private int cutIndex = 0;                                        // 当前进度索引
+    private static final int TREE_BFS_MAX = 200;                     // 最大扫描方块数
+
+    // ── v2.5.2: 树模式持久化 + 垫脚回收 ──
+    @Nullable private BlockPos lastTreeTarget;         // 正在处理中的树目标（跨 restart 持久化）
+    private int treeStuckTicks = 0;                    // 树模式无进度计时
+    private static final int TREE_STUCK_RESET = 120;   // 6秒无进度→换角度
+    private static final int TREE_STUCK_ABANDON = 300; // 15秒无进度→放弃
+    private final List<BlockPos> pillarPlacements = new ArrayList<>(); // 垫脚放置位置（用于回收）
 
     // 优先级表
     private static final Map<String, Integer> DEFAULT_PRIORITY = new LinkedHashMap<>();
@@ -139,9 +155,21 @@ public class BTreeGatherGoal extends Goal {
                 return true;
             }
         }
+        // v2.5.2: 持久化树目标 — 同一棵树跨 restart 继续
+        if (lastTreeTarget != null && isValidTarget(lastTreeTarget)) {
+            currentTarget = TaskTarget.fromBlockState(lastTreeTarget,
+                companion.level().getBlockState(lastTreeTarget));
+            treeMode = true;
+            treeBasePos = lastTreeTarget;
+            treeStuckTicks = 0;
+            return true;
+        }
         pendingResource = null;
         treeMode = false;
         treeBasePos = null;
+        lastTreeTarget = null;
+        pillarPlacements.clear();
+        cutList.clear();
         currentTarget = scan();
         return currentTarget != null;
     }
@@ -156,12 +184,18 @@ public class BTreeGatherGoal extends Goal {
         AICompanionMod.LOGGER.info("[BTreeGather] Started: {} treeMode={} treeBase={}",
             currentTarget, treeMode, treeBasePos);
         companion.setActivelyGathering(true);
+        navigator.stop(); // 清除上一Goal遗留的导航状态，避免启动延迟
         blockBreaker = null;
         cachedTarget = null;
         scanTimer = 0;
         stuckTicks = 0;
+        treeStuckTicks = 0;
         lastStuckCheckPos = companion.blockPosition();
         lastActionText = "";
+        // v2.5.2: 树模式记录持久化目标（但保留之前的 pillarPlacements）
+        if (treeMode && treeBasePos != null) {
+            lastTreeTarget = treeBasePos;
+        }
         behaviorTree.onStart(companion, currentTarget);
     }
 
@@ -175,7 +209,8 @@ public class BTreeGatherGoal extends Goal {
                 barrierAttempts = 0;
                 return;
             }
-            pendingResource = null;
+            // v2.5.2: 树模式保留 pendingResource，moveToTarget 用它判断是否需要垫脚
+            if (!treeMode) pendingResource = null;
         }
 
         if (currentTarget == null) {
@@ -195,48 +230,81 @@ public class BTreeGatherGoal extends Goal {
             companion.setSprinting(false);
         }
 
+        // v2.5.2: 树模式无进度计时
+        if (treeMode) {
+            treeStuckTicks++;
+            if (treeStuckTicks > TREE_STUCK_ABANDON) {
+                AICompanionMod.LOGGER.info("[BTreeGather] Tree stuck {} ticks, abandoning tree at {}",
+                    treeStuckTicks, treeBasePos);
+                companion.setActivelyGathering(false);
+                cooldownUntil = companion.level().getGameTime() + COMPLETION_COOLDOWN_TICKS;
+                blockBreaker = null;
+                pendingResource = null;
+                barrierAttempts = 0;
+                treeMode = false;
+                treeBasePos = null;
+                lastTreeTarget = null;
+                pillarPlacements.clear();
+                currentTarget = null;
+                cachedTarget = null;
+                return;
+            }
+            if (treeStuckTicks > TREE_STUCK_RESET && treeStuckTicks % 40 == 0) {
+                AICompanionMod.LOGGER.info("[BTreeGather] Tree slow progress ({} ticks), re-scanning approach", treeStuckTicks);
+                cachedTarget = null; // 强制下次扫描
+            }
+        }
+
         BehaviorNode.Status status = behaviorTree.tick(companion, currentTarget);
 
         if (status == BehaviorNode.Status.SUCCESS) {
             BlockPos minedPos = currentTarget != null ? currentTarget.getPosition() : null;
             String minedName = currentTarget != null ? currentTarget.getTargetId() : "";
 
-            // v2.5.1: 树模式 — 挖完后找上一层连接木头，够不到时走到树基垫脚
+            // v2.5.2: 树模式 — 有进度时重置卡住计时
+            if (treeMode) treeStuckTicks = 0;
+
             if (treeMode && minedPos != null && isLogName(minedName)) {
-                BlockPos above = findLogAbove(minedPos);
-                if (above != null) {
-                    if (!canReachBlock(above)) {
-                        // 先走到树基正下方再垫脚
-                        BlockPos basePos = new BlockPos(minedPos.getX(), companion.blockPosition().getY(), minedPos.getZ());
-                        AICompanionMod.LOGGER.info("[BTreeGather] Next log {} out of reach, walking to tree base {} then pillar", above, basePos);
-                        // 导航到树基位置
-                        navigator.navigateToGroundBelow(basePos, 1.0);
-                        // 尝试垫脚（只一次，下个 tick 再判断）
-                        tryPillarUp();
-                        // 设置 pendingResource 让 canUse 下次恢复（不立即 chain）
-                        pendingResource = above;
-                        currentTarget = null;
+                cutIndex++;
+                if (cutIndex < cutList.size()) {
+                    BlockPos nextLog = cutList.get(cutIndex);
+                    // 验证目标仍是木头（可能被自然事件改变或已被同伴自己挖掉）
+                    String nextName = companion.level().getBlockState(nextLog)
+                        .getBlock().builtInRegistryHolder().key().location().getPath();
+                    if (!isLogName(nextName)) {
+                        AICompanionMod.LOGGER.info("[BTreeGather] Next log {} changed to {}, skipping", nextLog, nextName);
+                        currentTarget = null; // 触发scan找下一个目标
                         return;
                     }
-                    AICompanionMod.LOGGER.info("[BTreeGather] Tree chain: {} → next log {}", minedPos, above);
-                    currentTarget = TaskTarget.fromBlockState(above,
-                        companion.level().getBlockState(above));
+                    // v2.5.3: 统一路径 — 直接设目标+重启行为树，moveToTarget负责导航/垫脚
+                    // 不通过pendingResource绕圈（MC-036：pendingResource恢复间隙导致FAILURE）
+                    AICompanionMod.LOGGER.info("[BTreeGather] Tree progress: {}/{} → next log {} (Y={})",
+                        cutIndex, cutList.size(), nextLog, nextLog.getY());
+                    currentTarget = TaskTarget.fromBlockState(nextLog,
+                        companion.level().getBlockState(nextLog));
+                    companion.getLookControl().setLookAt(
+                        nextLog.getX() + 0.5, nextLog.getY() + 0.5, nextLog.getZ() + 0.5);
                     blockBreaker = null;
                     behaviorTree.onStart(companion, currentTarget);
                     return;
                 } else {
-                    AICompanionMod.LOGGER.info("[BTreeGather] Tree complete at {}", minedPos);
+                    AICompanionMod.LOGGER.info("[BTreeGather] Tree complete: {} logs cut", cutList.size());
+                    recoverPillarBlocks();
                 }
             }
 
-            // 非树模式或树已砍完 → 正常冷却
+            // 非树模式或树已砍完 → 冷却
             companion.setActivelyGathering(false);
-            cooldownUntil = companion.level().getGameTime() + COMPLETION_COOLDOWN_TICKS;
+            // v2.5.2: 树完成后短冷却(10tick)，快速跳到下一棵树
+            boolean wasTree = treeMode;
+            cooldownUntil = companion.level().getGameTime() + (wasTree ? 10 : COMPLETION_COOLDOWN_TICKS);
             blockBreaker = null;
             pendingResource = null;
             barrierAttempts = 0;
             treeMode = false;
             treeBasePos = null;
+            lastTreeTarget = null;
+            pillarPlacements.clear();
             String msg = "⛏ 采集完成";
             if (!msg.equals(lastActionText)) {
                 companion.setActionText(msg);
@@ -245,6 +313,16 @@ public class BTreeGatherGoal extends Goal {
             currentTarget = null;
             cachedTarget = null;
         } else if (status == BehaviorNode.Status.FAILURE) {
+            // v2.5.2: 树模式失败不立即清除状态，保持持久化目标
+            if (treeMode) {
+                AICompanionMod.LOGGER.info("[BTreeGather] Tree mode FAILURE on {}, keeping tree state for retry", treeBasePos);
+                cooldownUntil = companion.level().getGameTime() + 10; // 短冷却快速重试
+                blockBreaker = null;
+                pendingResource = null;
+                currentTarget = null;
+                cachedTarget = null;
+                return;
+            }
             companion.setActivelyGathering(false);
             cooldownUntil = companion.level().getGameTime() + COMPLETION_COOLDOWN_TICKS / 2;
             blockBreaker = null;
@@ -253,8 +331,6 @@ public class BTreeGatherGoal extends Goal {
                 pendingResource = null;
                 barrierAttempts = 0;
             }
-            treeMode = false;
-            treeBasePos = null;
             currentTarget = null;
             cachedTarget = null;
         }
@@ -271,6 +347,14 @@ public class BTreeGatherGoal extends Goal {
         cachedTarget = null;
         scanTimer = 0;
         stuckTicks = 0;
+        treeStuckTicks = 0;
+        pendingResource = null;
+        treeMode = false;
+        treeBasePos = null;
+        lastTreeTarget = null;
+        pillarPlacements.clear();
+        cutList.clear();
+        justEnteredMode = true;
     }
 
     // ==================== 行为树原子动作 ====================
@@ -285,16 +369,52 @@ public class BTreeGatherGoal extends Goal {
 
         double distSq = entity.distanceToSqr(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
         int vertDist = Math.abs(entity.blockPosition().getY() - pos.getY());
+        int entityY = entity.blockPosition().getY();
+
+        // v2.5.3: 树模式 — Y差>2就继续垫脚，垫到Y差≤2再开挖。不用canReachBlock做阈值。
+        if (treeMode && treeBasePos != null && pos.getY() > entityY + 2) {
+            double xzDist = Math.sqrt(
+                (entity.blockPosition().getX() - treeBasePos.getX()) * (entity.blockPosition().getX() - treeBasePos.getX()) +
+                (entity.blockPosition().getZ() - treeBasePos.getZ()) * (entity.blockPosition().getZ() - treeBasePos.getZ()));
+            if (xzDist <= 2.0) {
+                int vertGap = pos.getY() - entity.blockPosition().getY();
+                if (vertGap > 2) {
+                    if (entity.onGround()) {
+                        AICompanionMod.LOGGER.info("[BTreeGather] Pillar needed: target=Y{}, myY={}, vertGap={}",
+                            pos.getY(), entity.blockPosition().getY(), vertGap);
+                        tryPillarUp(treeBasePos, pos);
+                    } else {
+                        AICompanionMod.LOGGER.info("[BTreeGather] Pillar needed but not onGround, waiting...");
+                    }
+                }
+                navigator.stop();
+                entity.setSprinting(false);
+                entity.getLookControl().setLookAt(
+                    pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
+                return vertGap <= 2 ? BehaviorNode.Status.SUCCESS : BehaviorNode.Status.RUNNING;
+            }
+            // 还没到树旁：导航到树基邻接空地
+            BlockPos walkTo = findAdjacentWalkable(treeBasePos);
+            if (walkTo != null) navigator.navigateToExact(walkTo, 1.0);
+            else navigator.navigateToExact(treeBasePos, 1.0);
+            entity.setSprinting(distSq > 25.0);
+            entity.getLookControl().setLookAt(
+                pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
+            return BehaviorNode.Status.RUNNING;
+        }
 
         // v2.4.1: 挖掘距离匹配 BreakBlockAction (4.5²≈20)
         boolean inRange = distSq <= 20.0 || (distSq <= 36.0 && vertDist <= 8);
         if (inRange) {
             navigator.stop();
+            entity.setSprinting(false);
             return BehaviorNode.Status.SUCCESS;
         }
 
+        // v2.5.2: 远距离疾跑，近距离走路
+        entity.setSprinting(distSq > 25.0);
+
         // v2.4: 高温方块从不向空中寻路 — 只导航到正下方地面
-        int entityY = entity.blockPosition().getY();
         if (pos.getY() > entityY + 1) {
             navigator.navigateToGroundBelow(pos, 1.0);
         } else {
@@ -363,6 +483,32 @@ public class BTreeGatherGoal extends Goal {
                     return BehaviorNode.Status.RUNNING;
                 }
             }
+
+            // v2.5.2: 射线无障碍但目标在下方且不可导航 → 尝试向下挖掘
+            int entityY = entity.blockPosition().getY();
+            String targetName = target.getTargetId();
+            if (pos.getY() < entityY && isOreBlock(targetName.replace("minecraft:", ""))) {
+                BlockPos digTarget = findDownwardBarrier(entity, pos);
+                if (digTarget != null) {
+                    if (barrierAttempts >= MAX_BARRIER_ATTEMPTS) {
+                        AICompanionMod.LOGGER.info("[BTreeGather] Too many downward dig attempts for {}", pos);
+                        pendingResource = null;
+                        barrierAttempts = 0;
+                        return BehaviorNode.Status.FAILURE;
+                    }
+                    pendingResource = pos;
+                    barrierAttempts++;
+                    if (blockBreaker != null) {
+                        blockBreaker.stop(entity);
+                        blockBreaker = null;
+                    }
+                    BlockState digState = entity.level().getBlockState(digTarget);
+                    currentTarget = TaskTarget.fromBlockState(digTarget, digState);
+                    AICompanionMod.LOGGER.info("[BTreeGather] Digging downward {} to reach ore {} (attempt {})",
+                        digTarget, pos, barrierAttempts);
+                    return BehaviorNode.Status.RUNNING;
+                }
+            }
         }
 
         if (blockBreaker == null) {
@@ -370,6 +516,28 @@ public class BTreeGatherGoal extends Goal {
             String shortName = blockName.contains(":") ? blockName.split(":")[1] : blockName;
             blockBreaker = new BreakBlockAction(BlockMatcher.contains(shortName));
             blockBreaker.setTaskTarget(target);
+            breakerStuckTicks = 0;
+        }
+
+        // MC-039: BreakBlockAction连续运行但无进展→可能被树叶/障碍物挡住→重新射线检测
+        breakerStuckTicks++;
+        if (breakerStuckTicks > MAX_BREAKER_STUCK && breakerStuckTicks % 20 == 0) {
+            BlockHitResult rehit = raycastToBlock(entity, pos);
+            if (rehit != null && !rehit.getBlockPos().equals(pos)) {
+                BlockPos newBarrier = rehit.getBlockPos();
+                BlockState newBarrierState = entity.level().getBlockState(newBarrier);
+                if (!newBarrierState.isAir() && newBarrierState.getBlock().defaultDestroyTime() >= 0
+                    && isBarrier(newBarrierState)) {
+                    AICompanionMod.LOGGER.info("[BTreeGather] Breaker stuck {} ticks, found new barrier {}",
+                        breakerStuckTicks, newBarrier);
+                    pendingResource = pos;
+                    if (blockBreaker != null) { blockBreaker.stop(entity); blockBreaker = null; }
+                    currentTarget = TaskTarget.fromBlockState(newBarrier, newBarrierState);
+                    barrierAttempts++;
+                    breakerStuckTicks = 0;
+                    return BehaviorNode.Status.RUNNING;
+                }
+            }
         }
 
         String actionMsg = "⛏ " + target.getTargetId().replace("minecraft:", "").replace("_", " ");
@@ -379,6 +547,7 @@ public class BTreeGatherGoal extends Goal {
         }
 
         if (blockBreaker.tick(entity)) {
+            breakerStuckTicks = 0;
             blockBreaker = null;
             if (pendingResource != null && !pos.equals(pendingResource)) {
                 AICompanionMod.LOGGER.info("[BTreeGather] Barrier mined, switching back to resource {}", pendingResource);
@@ -439,21 +608,62 @@ public class BTreeGatherGoal extends Goal {
         return current.equals(from) ? null : current;
     }
 
-    /** 找给定位置正上方直接相连的原木（用于树模式链式砍伐） */
-    @Nullable
-    private BlockPos findLogAbove(BlockPos from) {
+    /**
+     * v2.5.3: BFS全树扫描。从树底出发沿6方向遍历所有相连原木方块，
+     * 按Y升序→距离排序存入cutList，一步获取整棵树的完整挖掘计划。
+     */
+    private void scanFullTree(BlockPos startLog) {
+        cutList.clear();
+        cutIndex = 0;
         Level level = companion.level();
-        // 检查正上方 1-3 格（覆盖原木+树叶间隙的情况）
-        for (int dy = 1; dy <= 4; dy++) {
-            BlockPos above = from.above(dy);
-            BlockState state = level.getBlockState(above);
-            if (state.isAir()) continue;
-            String name = state.getBlock().builtInRegistryHolder().key().location().getPath();
-            if (isLogName(name)) return above.immutable();
-            // 如果遇到非木头非空气方块，说明树顶到了
-            if (state.getBlock().defaultDestroyTime() >= 0 && !isLeavesName(name)) break;
+        BlockPos origin = companion.blockPosition();
+
+        java.util.ArrayDeque<BlockPos> queue = new java.util.ArrayDeque<>();
+        java.util.HashSet<BlockPos> visited = new java.util.HashSet<>();
+        int leavesFound = 0;
+        queue.add(startLog);
+        visited.add(startLog);
+
+        while (!queue.isEmpty() && visited.size() < TREE_BFS_MAX) {
+            BlockPos current = queue.poll();
+            cutList.add(current);
+            for (var dir : net.minecraft.core.Direction.values()) {
+                BlockPos neighbor = current.relative(dir);
+                if (visited.contains(neighbor)) continue;
+                BlockState state = level.getBlockState(neighbor);
+                if (state.isAir()) continue;
+                String name = state.getBlock().builtInRegistryHolder().key().location().getPath();
+                if (isLogName(name)) {
+                    visited.add(neighbor);
+                    queue.add(neighbor);
+                } else if (isLeavesName(name)) {
+                    // 树叶遮挡：穿透一层树叶看后面是否还有原木
+                    BlockPos behind = current.relative(dir, 2);
+                    if (!visited.contains(behind)) {
+                        BlockState behindState = level.getBlockState(behind);
+                        String behindName = behindState.getBlock()
+                            .builtInRegistryHolder().key().location().getPath();
+                        if (isLogName(behindName)) {
+                            visited.add(behind);
+                            queue.add(behind);
+                            leavesFound++;
+                        }
+                    }
+                }
+            }
         }
-        return null;
+
+        // Y升序，同Y按距同伴距离排序 → 同层平推效果
+        cutList.sort((a, b) -> {
+            int yCmp = Integer.compare(a.getY(), b.getY());
+            if (yCmp != 0) return yCmp;
+            return Double.compare(
+                origin.distSqr(a), origin.distSqr(b));
+        });
+
+        AICompanionMod.LOGGER.info("[BTreeGather] Full tree scan: {} logs ({} leaf-penetrated), base={}, top={}",
+            cutList.size(), leavesFound, startLog,
+            cutList.isEmpty() ? "none" : cutList.get(cutList.size() - 1));
     }
 
     /** 判断方块名是否为原木/菌柄/木头类 */
@@ -476,46 +686,134 @@ public class BTreeGatherGoal extends Goal {
     }
 
     /**
-     * 在脚下放置一个廉价方块并跳上去，用于爬高砍树。
-     * 只在脚下位置放置，不作水平偏移。放置时蹲下防止掉落。
+     * v2.5.3: 在树基附近放置垫脚方块并跳上去。
+     * 先找到树基旁最近的可行走地面，走到后再在脚下放方块垫高。
+     * 支持连续多层垫脚直到够到目标。
+     *
+     * @param pillarTarget 树基位置（用于定位附近地面）
+     * @param targetLog    需要够到的目标原木位置
      */
-    private boolean tryPillarUp() {
+    private boolean tryPillarUp(BlockPos pillarTarget, BlockPos targetLog) {
         Level level = companion.level();
-        BlockPos feetPos = companion.blockPosition();
+        BlockPos myPos = companion.blockPosition();
 
-        // 脚下必须是空气或可替换（确保能放）
-        BlockState state = level.getBlockState(feetPos);
-        if (!state.isAir() && !state.canBeReplaced()) {
-            AICompanionMod.LOGGER.info("[BTreeGather] Cannot pillar at {} — occupied by {}", feetPos,
-                state.getBlock().builtInRegistryHolder().key().location().getPath());
+        // v2.5.3: 找树基附近最近的可站立地面（避开树干占用的XZ），而不是直接导航到树基XZ
+        BlockPos groundSpot = findAdjacentWalkable(pillarTarget);
+        if (groundSpot == null) {
+            groundSpot = pillarTarget; // fallback
+        }
+
+        double distToGround = Math.sqrt(
+            (myPos.getX() - groundSpot.getX()) * (myPos.getX() - groundSpot.getX()) +
+            (myPos.getZ() - groundSpot.getZ()) * (myPos.getZ() - groundSpot.getZ()));
+
+        // 还没走到树基附近，先导航
+        if (distToGround > 2.0) {
+            AICompanionMod.LOGGER.info("[BTreeGather] Pillar: not at ground spot (dist={}), navigating to {}",
+                String.format("%.1f", distToGround), groundSpot);
+            navigator.navigateToExact(groundSpot, 1.0);
             return false;
         }
 
-        int slot = findPillarBlock();
-        if (slot < 0) {
-            AICompanionMod.LOGGER.info("[BTreeGather] No pillar block available");
+        // MC-038: 垫脚前检查头顶两格是否有树叶/障碍物，有则先清除
+        BlockPos above1 = myPos.above();
+        BlockPos above2 = myPos.above(2);
+        BlockState aboveState1 = level.getBlockState(above1);
+        BlockState aboveState2 = level.getBlockState(above2);
+        if ((!aboveState1.isAir() && !aboveState1.canBeReplaced() && isBarrier(aboveState1))
+            || (!aboveState2.isAir() && !aboveState2.canBeReplaced() && isBarrier(aboveState2))) {
+            BlockPos blocker = (!aboveState1.isAir() && isBarrier(aboveState1)) ? above1 : above2;
+            AICompanionMod.LOGGER.info("[BTreeGather] Overhead blocked by {} at {}, clearing before pillar",
+                level.getBlockState(blocker).getBlock().builtInRegistryHolder().key().location().getPath(), blocker);
+            // 用pendingResource保护树目标：挖完树叶后mineTarget会自动切回pendingResource
+            pendingResource = targetLog;
+            currentTarget = TaskTarget.fromBlockState(blocker, level.getBlockState(blocker));
+            blockBreaker = null;
+            behaviorTree.onStart(companion, currentTarget);
+            barrierAttempts = 0; // 树叶不算排障失败
             return false;
         }
 
-        net.minecraft.world.item.ItemStack stack = companion.getItem(slot);
-        if (stack.isEmpty() || !(stack.getItem() instanceof net.minecraft.world.item.BlockItem blockItem)) {
-            return false;
-        }
-
-        companion.setShiftKeyDown(true);
-        level.setBlock(feetPos, blockItem.getBlock().defaultBlockState(), 3);
-        companion.setShiftKeyDown(false);
-
-        stack.shrink(1);
-        if (stack.isEmpty()) companion.setItem(slot, net.minecraft.world.item.ItemStack.EMPTY);
-
+        // v2.5.3: 垫脚纯执行——放方块+跳。决策（何时垫、垫多少）由调用者根据vertGap控制
         if (companion.onGround()) {
-            companion.getJumpControl().jump();
+            BlockPos feetPos = myPos;
+            BlockState state = level.getBlockState(feetPos);
+            if (state.isAir() || state.canBeReplaced()) {
+                int slot = findPillarBlock();
+                if (slot >= 0) {
+                    net.minecraft.world.item.ItemStack stack = companion.getItem(slot);
+                    if (!stack.isEmpty() && stack.getItem() instanceof net.minecraft.world.item.BlockItem blockItem) {
+                        int yBefore = myPos.getY();
+                        companion.setShiftKeyDown(true);
+                        level.setBlock(feetPos, blockItem.getBlock().defaultBlockState(), 3);
+                        companion.setShiftKeyDown(false);
+                        stack.shrink(1);
+                        if (stack.isEmpty()) companion.setItem(slot, net.minecraft.world.item.ItemStack.EMPTY);
+                        pillarPlacements.add(feetPos.immutable());
+                        if (companion.onGround()) companion.getJumpControl().jump();
+                        // MC-042: 方块在脚下放置时可能被横向推开而非向上顶。
+                        // 如果Y没变，说明被推下垫脚柱→手动抬升一格。
+                        if (companion.blockPosition().getY() == yBefore) {
+                            companion.setPos(companion.getX(), yBefore + 1.0, companion.getZ());
+                            AICompanionMod.LOGGER.info("[BTreeGather] Forced elevate to Y={} after pillar push-off", yBefore + 1);
+                        }
+                        AICompanionMod.LOGGER.info("[BTreeGather] Pillared up at {} using {} (treeBase={}, target=Y{}, vertGap={})",
+                            feetPos, blockItem.getBlock().builtInRegistryHolder().key().location().getPath(),
+                            pillarTarget, targetLog.getY(), targetLog.getY() - myPos.getY());
+                        return true;
+                    }
+                } else {
+                    AICompanionMod.LOGGER.info("[BTreeGather] No pillar block available");
+                }
+            }
         }
+        return false;
+    }
 
-        AICompanionMod.LOGGER.info("[BTreeGather] Pillared up at {} using {}", feetPos,
-            blockItem.getBlock().builtInRegistryHolder().key().location().getPath());
-        return true;
+    /**
+     * v2.5.3: 在树基周围的水平邻接方向中，找同伴当前Y高度上第一个可站立的空地。
+     * 不用findWalkableGroundStatic（从高往低扫可能返回树上叶子层的错误坐标），
+     * 直接用同伴当前地面Y检查邻接位置。
+     */
+    @Nullable
+    private BlockPos findAdjacentWalkable(BlockPos treeBase) {
+        Level level = companion.level();
+        int groundY = companion.blockPosition().getY();
+        int[][] offsets = {{1,0}, {-1,0}, {0,1}, {0,-1}, {1,1}, {-1,-1}, {1,-1}, {-1,1}};
+        for (int[] off : offsets) {
+            BlockPos check = new BlockPos(treeBase.getX() + off[0], groundY, treeBase.getZ() + off[1]);
+            var below = level.getBlockState(check.below());
+            var at = level.getBlockState(check);
+            var above = level.getBlockState(check.above());
+            if (!below.isAir() && below.getBlock().defaultDestroyTime() >= 0
+                && (at.isAir() || at.canBeReplaced())
+                && (above.isAir() || above.canBeReplaced())) {
+                return check;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * v2.5.2: 树砍完后回收所有垫脚方块。
+     * 从最高的开始向下挖，确保方块能掉落到地面被收集。
+     */
+    private void recoverPillarBlocks() {
+        if (pillarPlacements.isEmpty()) return;
+        AICompanionMod.LOGGER.info("[BTreeGather] Recovering {} pillar blocks", pillarPlacements.size());
+        Level level = companion.level();
+        // 从高到低排序
+        pillarPlacements.sort((a, b) -> Integer.compare(b.getY(), a.getY()));
+        for (BlockPos pos : pillarPlacements) {
+            BlockState state = level.getBlockState(pos);
+            if (state.isAir()) continue;
+            String name = state.getBlock().builtInRegistryHolder().key().location().getPath();
+            // 只回收不是矿石/原木的廉价方块（即我们放置的垫脚方块）
+            if (!isOreBlock(name) && !isLogName(name)) {
+                level.destroyBlock(pos, true);
+            }
+        }
+        pillarPlacements.clear();
     }
 
     /** 在背包中找一个可用来垫脚的廉价方块（排除矿石） */
@@ -534,13 +832,15 @@ public class BTreeGatherGoal extends Goal {
                 || name.contains("gravel") || name.contains("sand"))
                 return i;
         }
-        // 任意非矿石方块
+        // 任意非矿石非原木方块
         for (int i = 0; i < companion.getInventorySize(); i++) {
             net.minecraft.world.item.ItemStack stack = companion.getItem(i);
             if (stack.isEmpty() || !(stack.getItem() instanceof net.minecraft.world.item.BlockItem)) continue;
             String name = stack.getItem().builtInRegistryHolder().key().location().getPath();
             if (name.contains("_ore") || name.contains("ancient_debris")
                 || name.contains("gilded_blackstone")) continue;
+            // MC-030: 排除原木类，避免用砍下来的原木垫脚导致循环
+            if (isLogName(name)) continue;
             return i;
         }
         return -1;
@@ -551,14 +851,22 @@ public class BTreeGatherGoal extends Goal {
     private int scanTimer = 0;
     private static final int SCAN_INTERVAL = 20;
     @Nullable private TaskTarget cachedTarget;
+    private boolean justEnteredMode = true; // v2.5.2: 首次进入采集模式强制立即扫描
 
     @Nullable
     private TaskTarget scan() {
+        // v2.5.2: 首次进入模式强制立即扫描，不使用缓存
+        if (justEnteredMode) {
+            justEnteredMode = false;
+            cachedTarget = null;
+            scanTimer = SCAN_INTERVAL; // 强制触发扫描
+        }
         scanTimer++;
         if (cachedTarget != null && scanTimer < SCAN_INTERVAL) return cachedTarget;
         scanTimer = 0;
         treeMode = false;
         treeBasePos = null;
+        cutList.clear();
 
         Level level = companion.level();
         BlockPos origin = companion.blockPosition();
@@ -598,7 +906,7 @@ public class BTreeGatherGoal extends Goal {
                     }
                     if (score <= 0) continue;
 
-                    if (!isExposed(level, p)) continue;
+                    if (!isDiscoverable(level, p, isOreBlock(name))) continue;
 
                     // v2.5.1: 木头类方块 — 追溯到底部，验证底部仍是木头
                     BlockPos effectivePos = p;
@@ -631,11 +939,13 @@ public class BTreeGatherGoal extends Goal {
             if (path != null && path.canReach()) {
                 cachedTarget = TaskTarget.fromBlockState(c.pos,
                     level.getBlockState(c.pos));
-                // v2.4: 检测是否为树模式
+                // v2.5.3: 树模式 — BFS全树扫描，填充cutList
                 if (c.isLog) {
                     treeMode = true;
                     treeBasePos = c.pos;
-                    AICompanionMod.LOGGER.info("[BTreeGather] Tree mode: bottom log at {}", c.pos);
+                    scanFullTree(c.pos);
+                    AICompanionMod.LOGGER.info("[BTreeGather] Tree mode: {} logs scanned from base {}",
+                        cutList.size(), c.pos);
                 }
                 return cachedTarget;
             }
@@ -645,10 +955,28 @@ public class BTreeGatherGoal extends Goal {
         return null;
     }
 
-    private static boolean isExposed(Level level, BlockPos pos) {
+    /**
+     * v2.5.2: 检测方块是否可被发现。
+     * 矿石类：放宽条件——只要不是6面都被不可破坏方块包围即可。
+     * 木头/其他：保持原有逻辑，至少一个面接触空气。
+     */
+    private static boolean isDiscoverable(Level level, BlockPos pos, boolean isOre) {
+        int blockedFaces = 0;
+        int totalFaces = 0;
         for (var dir : net.minecraft.core.Direction.values()) {
-            if (level.getBlockState(pos.relative(dir)).isAir()) return true;
+            totalFaces++;
+            var neighborState = level.getBlockState(pos.relative(dir));
+            if (neighborState.isAir()) return true; // 任何类型暴露空气都立即返回
+            // 计数不可破坏的面（基岩、屏障等）
+            if (neighborState.getBlock().defaultDestroyTime() < 0) {
+                blockedFaces++;
+            }
         }
+        if (isOre) {
+            // 矿石：只有6面都被不可破坏方块包围才认为不可发现
+            return blockedFaces < totalFaces;
+        }
+        // 非矿石：必须至少有一个空气面（上面已返回true，到这里就是没有空气面）
         return false;
     }
 
@@ -676,6 +1004,31 @@ public class BTreeGatherGoal extends Goal {
 
     private static boolean isWoodBlock(String name) {
         return isLogName(name);
+    }
+
+    /**
+     * v2.5.2: 找实体到下方目标之间的第一个可挖障碍物。
+     * 从实体脚底向下扫描，找到第一个屏障方块用于挖掘通道。
+     */
+    @Nullable
+    private BlockPos findDownwardBarrier(AutomatonEntity entity, BlockPos target) {
+        BlockPos entityPos = entity.blockPosition();
+        // 从实体正下方开始，向下扫描到目标Y+1
+        for (int y = entityPos.getY() - 1; y > target.getY(); y--) {
+            BlockPos check = new BlockPos(target.getX(), y, target.getZ());
+            // 先检查目标XZ列
+            BlockState state = entity.level().getBlockState(check);
+            if (!state.isAir() && state.getBlock().defaultDestroyTime() >= 0 && isBarrier(state)) {
+                return check;
+            }
+            // 再检查实体XZ列
+            check = new BlockPos(entityPos.getX(), y, entityPos.getZ());
+            state = entity.level().getBlockState(check);
+            if (!state.isAir() && state.getBlock().defaultDestroyTime() >= 0 && isBarrier(state)) {
+                return check;
+            }
+        }
+        return null;
     }
 
     private static boolean isBarrier(BlockState state) {

@@ -30,6 +30,8 @@ import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
 import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import net.minecraftforge.fml.loading.FMLLoader;
+import net.minecraftforge.fml.loading.FMLPaths;
+import com.aiworkbench.companion.core.capability.CapabilityRegistry;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -38,6 +40,9 @@ public class AICompanionMod {
     public static final String MODID = "aicompanion";
     public static final String VERSION = "1.0.0";
     public static final Logger LOGGER = LogManager.getLogger();
+
+    /** 全局LLM开关 — false=禁用所有Ollama调用，纯逻辑运行 */
+    public static boolean LLM_DISABLED = true;
 
     public static MinecraftServer server;
     public static CompanionManager companionManager;
@@ -117,6 +122,10 @@ public class AICompanionMod {
         skillLibrary = new SkillLibrary();
         PresetSkillRegistry.registerAll(skillLibrary);
         LOGGER.info("[Setup] SkillLibrary initialized with presets");
+
+        LOGGER.info("[Setup] Loading capability definitions...");
+        CapabilityRegistry.loadFromConfig(FMLPaths.CONFIGDIR.get());
+        LOGGER.info("[Setup] CapabilityRegistry loaded: {}", CapabilityRegistry.getAllIds());
     }
 
     private void clientSetup(final FMLClientSetupEvent event) {

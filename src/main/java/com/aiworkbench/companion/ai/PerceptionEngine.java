@@ -416,6 +416,117 @@ public class PerceptionEngine {
     }
 
     /**
+     * 生成结构化的感知数据（供 core.decision 层使用）。
+     *
+     * <p>与旧版 gatherPerception() 的区别：
+     * <ul>
+     *   <li>nearbyBlocks 从 List&lt;String&gt; 升级为 List&lt;NearbyBlock&gt;，附带坐标和距离</li>
+     *   <li>nearbyEntities 从 List&lt;String&gt; 升级为 List&lt;NearbyEntity&gt;，附带 UUID 和位置</li>
+     *   <li>新增 inventorySummary 和 threats 字段</li>
+     * </ul>
+     *
+     * <p>旧版 gatherPerception() 保持不变，供现有调用方继续使用。</p>
+     */
+    public static com.aiworkbench.companion.core.perception.PerceptionData gatherStructured(AutomatonEntity companion) {
+        com.aiworkbench.companion.core.perception.PerceptionData data =
+            new com.aiworkbench.companion.core.perception.PerceptionData();
+
+        if (!(companion.level() instanceof ServerLevel serverLevel)) {
+            return data;
+        }
+
+        BlockPos pos = companion.blockPosition();
+        data.scanTimestamp = System.currentTimeMillis();
+
+        // ---- 自身状态 ----
+        data.self = new com.aiworkbench.companion.core.perception.PerceptionData.SelfStatus(
+            companion.getHealth(),
+            companion.getHungerLevel(),
+            pos,
+            "[companion]"
+        );
+
+        // ---- 方块扫描（复用现有 O(n³) 合并扫描逻辑）----
+        List<com.aiworkbench.companion.core.perception.PerceptionData.NearbyBlock> blocks = new ArrayList<>();
+        for (int dx = -BLOCK_SCAN_RADIUS; dx <= BLOCK_SCAN_RADIUS; dx++) {
+            for (int dy = -BLOCK_SCAN_RADIUS; dy <= BLOCK_SCAN_RADIUS; dy++) {
+                for (int dz = -BLOCK_SCAN_RADIUS; dz <= BLOCK_SCAN_RADIUS; dz++) {
+                    BlockPos checkPos = pos.offset(dx, dy, dz);
+                    BlockState state = serverLevel.getBlockState(checkPos);
+                    Block block = state.getBlock();
+                    if (block == Blocks.AIR) continue;
+
+                    String blockType = block.builtInRegistryHolder().key().location().getPath();
+                    double distance = Math.sqrt(pos.distSqr(checkPos));
+                    // 可达性：略过，由 MoveToAction 执行时精确检查
+                    boolean isReachable = distance <= 6.0;
+
+                    blocks.add(new com.aiworkbench.companion.core.perception.PerceptionData.NearbyBlock(
+                        blockType, checkPos.immutable(), distance, isReachable
+                    ));
+                }
+            }
+        }
+        // 按距离排序
+        blocks.sort(java.util.Comparator.comparingDouble(b -> b.distance()));
+        data.nearbyBlocks = blocks;
+
+        // ---- 实体扫描 ----
+        List<com.aiworkbench.companion.core.perception.PerceptionData.NearbyEntity> entities = new ArrayList<>();
+        List<com.aiworkbench.companion.core.perception.PerceptionData.NearbyEntity> threats = new ArrayList<>();
+
+        AABB entityBox = new AABB(pos).inflate(ENTITY_SCAN_RADIUS);
+        for (Entity e : serverLevel.getEntities(null, entityBox)) {
+            if (e == companion) continue;
+
+            String entityType = e.getType().builtInRegistryHolder().key().location().getPath();
+            double distance = Math.sqrt(pos.distSqr(e.blockPosition()));
+            boolean isHostile = e instanceof Monster;
+
+            var entry = new com.aiworkbench.companion.core.perception.PerceptionData.NearbyEntity(
+                entityType, e.getUUID(), e.blockPosition(), distance, isHostile
+            );
+            entities.add(entry);
+            if (isHostile && distance <= ENTITY_SCAN_RADIUS) {
+                threats.add(entry);
+            }
+        }
+        entities.sort(java.util.Comparator.comparingDouble(e -> e.distance()));
+        threats.sort(java.util.Comparator.comparingDouble(t -> t.distance()));
+        data.nearbyEntities = entities;
+        data.threats = threats;
+
+        // ---- 背包摘要 ----
+        java.util.Map<String, Integer> invSummary = new java.util.LinkedHashMap<>();
+        for (int i = 0; i < companion.getInventorySize(); i++) {
+            net.minecraft.world.item.ItemStack stack = companion.getItem(i);
+            if (!stack.isEmpty()) {
+                String name = stack.getItem().builtInRegistryHolder().key().location().getPath();
+                invSummary.merge(name, stack.getCount(), Integer::sum);
+            }
+        }
+        data.inventorySummary = invSummary;
+
+        // ---- 全树扫描：检测到原木时执行 BFS 获取完整砍伐计划 ----
+        data.treeCutList = null;
+        if (data.nearbyBlocks != null) {
+            for (var b : data.nearbyBlocks) {
+                String type = b.blockType();
+                if (isLogName(type) && b.distance() <= 6.0) {
+                    List<BlockPos> cutList = scanFullTree(serverLevel, b.pos(), pos);
+                    if (!cutList.isEmpty()) {
+                        data.treeCutList = cutList;
+                        AICompanionMod.LOGGER.info("[Perception] Tree scan: {} logs from base {}", cutList.size(), b.pos());
+                    }
+                    break; // 只扫描找到的第一棵树
+                }
+            }
+        }
+
+        return data;
+    }
+
+    /**
      * Check if entity is threatening owner (companion's owner UUID)
      */
     public static boolean isThreateningOwner(AutomatonEntity companion) {
@@ -444,5 +555,69 @@ public class PerceptionEngine {
         }
 
         return false;
+    }
+
+    // ==================== 全树扫描（BFS） ====================
+
+    /** BFS 全树扫描：从 startLog 沿 6 方向遍历所有相连原木，穿透 1 层树叶。
+     *  @return Y 升序→距离升序排序的原木位置列表 */
+    private static List<BlockPos> scanFullTree(ServerLevel level, BlockPos startLog, BlockPos origin) {
+        List<BlockPos> cutList = new ArrayList<>();
+        java.util.ArrayDeque<BlockPos> queue = new java.util.ArrayDeque<>();
+        java.util.HashSet<BlockPos> visited = new java.util.HashSet<>();
+        int maxBlocks = 200;
+        int leavesFound = 0;
+
+        queue.add(startLog);
+        visited.add(startLog);
+
+        while (!queue.isEmpty() && visited.size() < maxBlocks) {
+            BlockPos current = queue.poll();
+            cutList.add(current);
+            for (var dir : net.minecraft.core.Direction.values()) {
+                BlockPos neighbor = current.relative(dir);
+                if (visited.contains(neighbor)) continue;
+                BlockState state = level.getBlockState(neighbor);
+                if (state.isAir()) continue;
+                String name = state.getBlock().builtInRegistryHolder().key().location().getPath();
+                if (isLogName(name)) {
+                    visited.add(neighbor);
+                    queue.add(neighbor);
+                } else if (isLeavesName(name)) {
+                    // 穿透 1 层树叶看后面是否有原木
+                    BlockPos behind = current.relative(dir, 2);
+                    if (!visited.contains(behind)) {
+                        BlockState behindState = level.getBlockState(behind);
+                        String behindName = behindState.getBlock()
+                            .builtInRegistryHolder().key().location().getPath();
+                        if (isLogName(behindName)) {
+                            visited.add(behind);
+                            queue.add(behind);
+                            leavesFound++;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 排序：Y升序为主，同层按距离升序（同层平推效果）
+        cutList.sort((a, b) -> {
+            int yCmp = Integer.compare(a.getY(), b.getY());
+            if (yCmp != 0) return yCmp;
+            return Double.compare(origin.distSqr(a), origin.distSqr(b));
+        });
+
+        AICompanionMod.LOGGER.debug("[Perception] Full tree scan: {} logs ({} leaf-penetrated), base={}",
+            cutList.size(), leavesFound, startLog);
+        return cutList;
+    }
+
+    private static boolean isLogName(String name) {
+        return name.contains("_log") || name.contains("_stem")
+            || name.endsWith("_wood") || name.endsWith("_hyphae");
+    }
+
+    private static boolean isLeavesName(String name) {
+        return name.contains("_leaves") || name.contains("_leaf");
     }
 }

@@ -3,6 +3,7 @@ package com.aiworkbench.companion.task;
 import com.aiworkbench.companion.AICompanionMod;
 import com.aiworkbench.companion.entity.AutomatonEntity;
 import net.minecraft.core.BlockPos;
+import org.jetbrains.annotations.Nullable;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.ai.navigation.PathNavigation;
 import net.minecraft.world.level.pathfinder.Path;
@@ -82,6 +83,54 @@ public class Navigator {
         entity.getNavigation().stop();
         currentTarget = null;
         stuckTicks = 0;
+    }
+
+    /**
+     * 精确导航到目标XZ坐标正下方的可站立地面位置。
+     * 用于搭路前走到树基正下方等场景。
+     *
+     * @param targetXZ 目标XZ坐标（Y会被忽略，自动查找地面）
+     * @param speed 移动速度
+     * @return true=寻路成功，false=无法到达
+     */
+    public boolean navigateToExact(BlockPos targetXZ, double speed) {
+        BlockPos entityPos = entity.blockPosition();
+        // 从目标XZ正上方开始向下扫描找第一个实心方块，导航到它上面
+        BlockPos ground = findWalkableGround(targetXZ);
+        if (ground == null) {
+            // fallback: 使用实体当前Y
+            ground = new BlockPos(targetXZ.getX(), entityPos.getY(), targetXZ.getZ());
+        }
+        this.currentTarget = ground;
+        return entity.getNavigation().moveTo(ground.getX(), ground.getY(), ground.getZ(), speed);
+    }
+
+    /**
+     * 在目标XZ坐标上从实体Y向下扫描，找第一个上方两格都是空气的实心方块表面。
+     */
+    private BlockPos findWalkableGround(BlockPos targetXZ) {
+        return findWalkableGroundStatic(entity.level(), targetXZ, entity.blockPosition());
+    }
+
+    /** 静态版本，供外部类在不持有Navigator实例时使用 */
+    @Nullable
+    public static BlockPos findWalkableGroundStatic(net.minecraft.world.level.Level level, BlockPos targetXZ, BlockPos referencePos) {
+        int startY = referencePos.getY() + 3;
+        BlockPos best = null;
+        for (int y = startY; y >= level.getMinBuildHeight() + 1; y--) {
+            BlockPos check = new BlockPos(targetXZ.getX(), y, targetXZ.getZ());
+            var below = level.getBlockState(check.below());
+            var at = level.getBlockState(check);
+            var above = level.getBlockState(check.above());
+            if (!below.isAir() && below.getBlock().defaultDestroyTime() >= 0
+                && (at.isAir() || at.canBeReplaced())
+                && (above.isAir() || above.canBeReplaced())) {
+                best = check;
+            } else if (best != null) {
+                break;
+            }
+        }
+        return best;
     }
 
     public BlockPos getCurrentTarget() { return currentTarget; }

@@ -47,8 +47,11 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import net.minecraft.world.SimpleMenuProvider;
@@ -265,6 +268,17 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     private CurriculumProposal pendingProposal = null; // 当前待处理的课程提议（手动模式，兼容旧逻辑）
     private final TaskQueue taskQueue = new TaskQueue(); // 任务队列（自主模式）
     private final DialogueStack dialogueStack = new DialogueStack(); // 对话消息栈
+
+    // ==================== 新框架（P0-P5 闭环） ====================
+    private boolean useNewFramework = false; // 标志位：true=新框架接管 tick
+    private String newFrameworkMode = null; // null=跟随, "chop"=砍树, "mine"=挖矿
+    private final Set<String> authorizedCapabilities = new HashSet<>(); // 授权的能力ID集合
+    private final Map<BlockPos, Integer> failedTargets = new java.util.LinkedHashMap<>(); // 失败目标→失败次数，防止死循环
+    private BlockPos lastAttemptedTarget; // 最近尝试采集的目标位置
+    private com.aiworkbench.companion.core.action.ActionExecutor actionExecutor;
+    private com.aiworkbench.companion.core.decision.RuleBasedDecisionMaker ruleDecisionMaker;
+    private int perceptionCooldown; // 感知降频
+    private int decisionCooldown;   // 决策冷却（防抖动）
 
     // ==================== Valuable Items (Pickup Filter) ====================
 
@@ -586,6 +600,11 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     @Override
     public void aiStep() {
         this.updateSwingTime();
+        // 新框架仍需 super.aiStep() 驱动导航/移动控制/跳跃控制
+        // 旧 Goal 已在 enableNewFramework() 中移除，不会冲突
+        if (useNewFramework) {
+            tickCoreFramework();
+        }
         super.aiStep();
     }
 
@@ -923,9 +942,10 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
                 curriculumTickCounter = 0;
                 evaluateCurriculum();
             }
-            // LLM 采集战略 — 采集模式下每30秒获取一次LLM战略指导（仅空闲时）
+            // LLM 采集战略 — 仅当 gatherPriorityResources 为空时首次调用（按需触发）
+            // 之后不再重复调用，避免每30秒消耗 LLM 资源
             if (isGatherModeEnabled() && curriculumTickCounter == CURRICULUM_EVAL_INTERVAL / 2
-                && !isActivelyMining()) {
+                && !isActivelyMining() && gatherPriorityResources.isEmpty()) {
                 evaluateGatherStrategyAsync();
             }
         }
@@ -934,6 +954,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     /**
      * LLM 采集战略层：异步发送感知数据给 Ollama，获取优先采集目标。     * 在采集模式下每30秒运行一次，不阻塞游戏主线程。     */
     private void evaluateGatherStrategyAsync() {
+        if (AICompanionMod.LLM_DISABLED) return;
         ServerPlayer owner = getOwner();
         if (owner == null) return;
 
@@ -1264,16 +1285,20 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         var speedAttr = this.getAttribute(Attributes.MOVEMENT_SPEED);
         if (speedAttr == null) return;
         if (hungerLevel <= 6) { this.setSprinting(false); return; } // 饥饿≤6不能疾跑（原版规则）
-        double baseSpeed = baseMoveSpeed;               
+        double baseSpeed = baseMoveSpeed;
         ServerPlayer owner = getOwner();
         boolean shouldSprint = false;
-        // 追随：距离>6格疾跑追赶（原16格太远），或跟随模式下距离>4格也跑
+        // 追随：距离>6格疾跑追赶
         if (owner != null && this.distanceToSqr(owner) > 6.25) {
             shouldSprint = true;
         }
         // 战斗/采集/种植模式中自动疾跑（只在导航移动时，避免站桩跑步粒子）
         if (isGuardModeEnabled() || isGatherModeEnabled() || isFarmModeEnabled()) {
             shouldSprint = !this.getNavigation().isDone();
+        }
+        // 新框架：导航移动时自动疾跑
+        if (useNewFramework && !this.getNavigation().isDone()) {
+            shouldSprint = true;
         }
         this.setSprinting(shouldSprint);
         speedAttr.setBaseValue(shouldSprint ? baseSpeed * 1.3 : baseSpeed);
@@ -2509,6 +2534,8 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             case CapabilityFlags.PATROL -> CompanionState.PATROL;
             default -> CompanionState.FOLLOW;
         };
+        // 同步到EntityData，确保HUD和客户端显示正确
+        this.entityData.set(DATA_WORKING_MODE, scheduler.getActiveName().toLowerCase());
     }
 
     public void setPatrolModeEnabled(boolean enabled) {
@@ -2737,6 +2764,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         showDialogue("§d✨ 我已满级！" + roleHint + " §7[/companion squad create <角色>]", 200);
 
         // 异步触发LLM生成更有趣的介绍对话
+        if (AICompanionMod.LLM_DISABLED) return;
         ServerPlayer owner = getOwner();
         if (owner != null) {
             java.util.concurrent.CompletableFuture.runAsync(() -> {
@@ -3329,5 +3357,176 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
             amount *= (1.0f - reduction);
         }
         super.actuallyHurt(source, amount);
+    }
+
+    // ==================== 新框架 tick 驱动（P0-P5 闭环） ====================
+
+    /** 启用新框架 */
+    public void enableNewFramework() {
+        enableNewFramework(null);
+    }
+
+    /** 启用新框架并设置模式 */
+    public void enableNewFramework(String mode) {
+        if (actionExecutor == null) {
+            actionExecutor = new com.aiworkbench.companion.core.action.ActionExecutor(this);
+        }
+        if (ruleDecisionMaker == null) {
+            ruleDecisionMaker = new com.aiworkbench.companion.core.decision.RuleBasedDecisionMaker();
+        }
+        this.goalSelector.removeAllGoals(it -> true);
+        if (!this.onGround()) {
+            BlockPos ground = com.aiworkbench.companion.task.Navigator.findWalkableGroundStatic(
+                this.level(), this.blockPosition(), this.blockPosition());
+            if (ground != null) {
+                this.setPos(this.getX(), ground.getY(), this.getZ());
+            }
+        }
+        this.getNavigation().stop();
+        this.decisionCooldown = 0;
+        this.perceptionCooldown = 0;
+        authorizedCapabilities.clear();
+        setMode(mode != null ? mode : "follow");
+        useNewFramework = true;
+        AICompanionMod.LOGGER.info("[NewFramework] Enabled for {} mode={} caps={}",
+            this.getUUID(), newFrameworkMode, authorizedCapabilities);
+    }
+
+    /** 切换模式 */
+    public void setMode(String mode) {
+        this.newFrameworkMode = mode;
+        authorizedCapabilities.clear();
+        if ("chop".equals(mode)) {
+            authorizedCapabilities.add("gather_logs");
+        } else if ("mine".equals(mode)) {
+            authorizedCapabilities.add("gather_ores");
+        }
+        // "follow" 模式：不加任何采集能力，idle 时跟随
+    }
+
+    public String getMode() { return newFrameworkMode; }
+
+    /** 禁用新框架，回退旧 Goal 系统 */
+    public void disableNewFramework() {
+        useNewFramework = false;
+        if (actionExecutor != null) actionExecutor.abort();
+        AICompanionMod.LOGGER.info("[NewFramework] Disabled for {}", this.getUUID());
+    }
+
+    public boolean isNewFrameworkActive() { return useNewFramework; }
+
+    /** 检查目标方块是否仍未破坏 */
+    private boolean isStillThere(BlockPos pos) {
+        return !this.level().getBlockState(pos).isAir();
+    }
+
+    /**
+     * 每 tick 运行新框架：感知 → 决策 → 执行。
+     * @return true 表示新框架处理了本 tick（旧 goalSelector 应跳过）
+     */
+    private boolean tickCoreFramework() {
+        if (!useNewFramework) return false;
+
+        // 降频感知：每 20 tick（1 秒）重新扫描
+        perceptionCooldown--;
+        com.aiworkbench.companion.core.perception.PerceptionData perception = null;
+        if (perceptionCooldown <= 0) {
+            perception = PerceptionEngine.gatherStructured(this);
+            perceptionCooldown = 20;
+            // 感知刷新时清理已不存在的失败目标
+            failedTargets.keySet().removeIf(pos -> !isStillThere(pos));
+        }
+
+        // 有活跃动作 → 驱动执行（不重新决策）
+        if (actionExecutor.isActive()) {
+            // MC-043: 感知降频期间 perception 可能为 null，强制采集
+            if (perception == null) {
+                perception = PerceptionEngine.gatherStructured(this);
+                perceptionCooldown = 20;
+            }
+            var result = actionExecutor.tick(perception);
+            if (result != null) {
+                AICompanionMod.LOGGER.debug("[NewFramework] Action {}: {}",
+                    result.outcome(), result.detail() != null ? result.detail() : "");
+                // 记录失败目标，防止死循环
+                if (lastAttemptedTarget != null) {
+                    if (result.outcome() == com.aiworkbench.companion.core.action.ActionExecutor.ActionTickResult.Outcome.FAILED) {
+                        failedTargets.merge(lastAttemptedTarget, 1, Integer::sum);
+                        decisionCooldown = 60;
+                    } else if (lastAttemptedTarget.closerThan(this.blockPosition(), 2.0)
+                               && isStillThere(lastAttemptedTarget)) {
+                        // 序列"完成"但目标还在原地 → 能力什么都没做
+                        failedTargets.merge(lastAttemptedTarget, 1, Integer::sum);
+                        decisionCooldown = 60;
+                    } else {
+                        failedTargets.remove(lastAttemptedTarget); // 成功 → 清除失败记录
+                    }
+                }
+            }
+            return true;
+        }
+
+        // 无活跃动作 + 冷却中 → 等待（MC-044: 冷却在外层控制，DecisionMaker 为纯函数）
+        if (decisionCooldown > 0) {
+            decisionCooldown--;
+            return true;
+        }
+
+        // 无活跃动作 + 冷却结束 → 决策下一步
+        decisionCooldown = 20; // 1 秒冷却防止决策抖动
+        if (perception == null) {
+            perception = PerceptionEngine.gatherStructured(this);
+            perceptionCooldown = 20;
+        }
+        var memory = com.aiworkbench.companion.core.decision.MemorySnapshot.withAuth(authorizedCapabilities);
+        var decision = ruleDecisionMaker.decide(perception, memory);
+
+        // idle 行为取决于模式
+        if ("idle".equals(decision.actionId())) {
+            if ("chop".equals(newFrameworkMode) || "mine".equals(newFrameworkMode)) {
+                // 采集模式：idle → 站着等，不跟随（等感知刷新发现新目标）
+                return true;
+            }
+            // 跟随模式：idle → 跟随最近玩家
+            var nearest = this.level().getNearestPlayer(this, 64);
+            if (nearest != null) {
+                decision = new com.aiworkbench.companion.core.decision.ActionDecision("MoveTo",
+                    java.util.Map.of("target", nearest.blockPosition()),
+                    "idle → follow player", com.aiworkbench.companion.core.decision.DecisionSource.RULE_ENGINE);
+            } else {
+                return true;
+            }
+        }
+        // 提取目标位置（用于失败跟踪和死循环防护）
+        BlockPos decisionTarget = decision.params().get("$found_block.pos") instanceof BlockPos bp ? bp : null;
+
+        // 失败目标检查：同一目标失败≥3次 → 临时屏蔽，等感知刷新
+        if (decisionTarget != null) {
+            int fails = failedTargets.getOrDefault(decisionTarget, 0);
+            if (fails >= 3) {
+                AICompanionMod.LOGGER.debug("[NewFramework] Target {} failed {} times, skipping", decisionTarget, fails);
+                decisionCooldown = 60;
+                return true;
+            }
+        }
+
+        // 授权检查：EXECUTE_CAPABILITY 需在授权列表中
+        String capId = (String) decision.params().get("capability_id");
+        if (capId != null && !authorizedCapabilities.contains(capId)) {
+            // 未授权能力 → 直接跟随玩家，不产生自引用偏移
+            var nearest = this.level().getNearestPlayer(this, 64);
+            if (nearest != null) {
+                decision = new com.aiworkbench.companion.core.decision.ActionDecision("MoveTo",
+                    java.util.Map.of("target", nearest.blockPosition()),
+                    "unauthorized → follow player", com.aiworkbench.companion.core.decision.DecisionSource.RULE_ENGINE);
+            } else {
+                return true; // 找不到玩家，跳过本次决策
+            }
+        }
+        lastAttemptedTarget = decisionTarget;
+        AICompanionMod.LOGGER.info("[NewFramework] Decision: {} → {} {}",
+            decision.actionId(), decision.params(), decision.reasoning());
+        actionExecutor.dispatch(decision);
+        return true;
     }
 }

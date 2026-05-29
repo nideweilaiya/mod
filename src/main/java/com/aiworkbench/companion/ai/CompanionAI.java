@@ -112,6 +112,7 @@ public class CompanionAI {
      * Send a chat message and get AI response
      */
     public CompletableFuture<String> sendMessage(String playerMessage) {
+        if (AICompanionMod.LLM_DISABLED) return CompletableFuture.completedFuture(null);
         return CompletableFuture.supplyAsync(() -> {
             try {
                 // Log to L2 memory
@@ -158,6 +159,7 @@ public class CompanionAI {
      * Generate a spontaneous action/emotion without player input
      */
     public CompletableFuture<String> generateSpontaneousAction() {
+        if (AICompanionMod.LLM_DISABLED) return CompletableFuture.completedFuture(null);
         return CompletableFuture.supplyAsync(() -> {
             try {
                 String prompt = buildSpontaneousPrompt();
@@ -174,6 +176,7 @@ public class CompanionAI {
      * (combat_end, level_up, rare_resource, nightfall).
      */
     public CompletableFuture<String> generateEventResponse(String eventType, java.util.Map<String, Object> eventContext) {
+        if (AICompanionMod.LLM_DISABLED) return CompletableFuture.completedFuture(null);
         return CompletableFuture.supplyAsync(() -> {
             try {
                 String prompt = buildEventPrompt(eventType, eventContext);
@@ -294,6 +297,7 @@ public class CompanionAI {
     }
 
     private String callLLM(String prompt) throws Exception {
+        if (AICompanionMod.LLM_DISABLED) return null;
         // Build messages for chat API
         List<Map<String, String>> messages = new ArrayList<>();
 

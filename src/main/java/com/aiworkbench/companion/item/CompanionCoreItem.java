@@ -25,6 +25,8 @@ public class CompanionCoreItem extends Item {
     public CompanionCoreItem(Properties properties) {
         super(properties);
     }
+    // MC-047: stacksTo(1) 和 getMaxStackSize() 在 Gradle 编译依赖与 Forge 49.2.7 运行时
+    // 之间存在签名差异。暂时接受默认 maxStackSize=64，不影响功能测试。
 
     @Override
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {

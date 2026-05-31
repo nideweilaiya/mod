@@ -14,8 +14,20 @@
     },
     {
       "action": "repeat",
-      "condition": { "block_matches": "_log" },
+      "condition": { "list_not_empty": "$tree_cut_list" },
       "body": [
+        {
+          "action": "SetNextTarget",
+          "params": {}
+        },
+        {
+          "action": "NavigateToInteract",
+          "params": { "target": "$current_target" }
+        },
+        {
+          "action": "EnsureReachBlock",
+          "params": { "target": "$current_target" }
+        },
         {
           "action": "BreakBlock",
           "params": { "target": "$current_target" }
@@ -23,12 +35,16 @@
         {
           "action": "PickupItem",
           "params": { "item_filter": "log" }
-        },
-        {
-          "action": "MoveUpTarget",
-          "params": {}
         }
       ]
+    },
+    {
+      "action": "CleanupTemporaryBlocks",
+      "params": {}
+    },
+    {
+      "action": "PickupItem",
+      "params": { "item_filter": "" }
     }
   ]
 }

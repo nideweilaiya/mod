@@ -9,7 +9,10 @@ import com.aiworkbench.companion.entity.AutomatonEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.item.AxeItem;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.PickaxeItem;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
@@ -71,7 +74,7 @@ public class BreakBlockAction implements IAction {
     public boolean canExecute(PerceptionData perception) {
         if (target == null) return false;
         // 距离检查：必须在挖掘范围内
-        if (entity.blockPosition().distSqr(target) > BREAK_DISTANCE_SQ) return false;
+        if (!isWithinBreakReach(target)) return false;
         BlockState state = entity.level().getBlockState(target);
         if (state.isAir()) return false;
         // 不可破坏方块（基岩等）
@@ -155,13 +158,15 @@ public class BreakBlockAction implements IAction {
         double distSq = entity.distanceToSqr(
             effectiveTarget.getX() + 0.5, effectiveTarget.getY() + 0.5, effectiveTarget.getZ() + 0.5
         );
-        if (distSq > BREAK_DISTANCE_SQ) {
+        if (!isWithinBreakReach(effectiveTarget)) {
             if (this.obstacleTarget != null) {
                 this.obstacleTarget = null;
                 return ActionResult.IN_PROGRESS; // 障碍物太远 → 可能是障碍物在奇怪的位置，放弃
             }
             return ActionResult.FAILURE;
         }
+
+        equipBestToolFor(state);
 
         // 注视目标
         entity.getLookControl().setLookAt(
@@ -246,6 +251,34 @@ public class BreakBlockAction implements IAction {
             || name.contains("wool") || name.contains("carpet");
     }
 
+    private boolean isWithinBreakReach(BlockPos pos) {
+        return entity.getEyePosition().distanceToSqr(Vec3.atCenterOf(pos)) <= BREAK_DISTANCE_SQ;
+    }
+
+    private void equipBestToolFor(BlockState state) {
+        String blockName = state.getBlock().builtInRegistryHolder().key().location().getPath();
+        boolean needAxe = blockName.contains("_log") || blockName.contains("_stem")
+            || blockName.endsWith("_wood") || blockName.endsWith("_hyphae");
+        boolean needPickaxe = blockName.contains("_ore") || blockName.contains("stone")
+            || blockName.contains("deepslate") || blockName.contains("cobblestone");
+
+        ItemStack held = entity.getEquippedTool();
+        if (needAxe && held.getItem() instanceof AxeItem) return;
+        if (needPickaxe && held.getItem() instanceof PickaxeItem) return;
+        if (!needAxe && !needPickaxe) return;
+
+        for (int i = 0; i < entity.getInventorySize(); i++) {
+            ItemStack stack = entity.getItem(i);
+            boolean ok = needAxe ? stack.getItem() instanceof AxeItem : stack.getItem() instanceof PickaxeItem;
+            if (!stack.isEmpty() && ok) {
+                ItemStack mainHand = entity.getItemBySlot(EquipmentSlot.MAINHAND);
+                entity.setItemSlot(EquipmentSlot.MAINHAND, stack.copy());
+                entity.setItem(i, mainHand);
+                return;
+            }
+        }
+    }
+
     /**
      * 破坏方块并收集掉落物到背包。
      */
@@ -266,9 +299,7 @@ public class BreakBlockAction implements IAction {
 
         for (ItemStack drop : drops) {
             if (!drop.isEmpty()) {
-                if (!entity.addItemToInventory(drop)) {
-                    entity.spawnAtLocation(drop);
-                }
+                net.minecraft.world.level.block.Block.popResource(level, pos, drop);
             }
         }
 

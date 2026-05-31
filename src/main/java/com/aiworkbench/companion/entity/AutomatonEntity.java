@@ -275,6 +275,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     private final Set<String> authorizedCapabilities = new HashSet<>(); // 授权的能力ID集合
     private final Map<BlockPos, Integer> failedTargets = new java.util.LinkedHashMap<>(); // 失败目标→失败次数，防止死循环
     private BlockPos lastAttemptedTarget; // 最近尝试采集的目标位置
+    private com.aiworkbench.companion.core.brain.CoreBrain coreBrain;
     private com.aiworkbench.companion.core.action.ActionExecutor actionExecutor;
     private com.aiworkbench.companion.core.decision.RuleBasedDecisionMaker ruleDecisionMaker;
     private int perceptionCooldown; // 感知降频
@@ -926,7 +927,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         }
 
         // 驱动任务队列 — 每 tick 推进当前任务、处理超时、提升等待优先级
-        if (!this.level().isClientSide && isAlive() && getOwner() != null) {
+        if (!useNewFramework && !this.level().isClientSide && isAlive() && getOwner() != null) {
             taskQueue.tick(this);
             // 每 5 秒清理过期消息
             if (tickCount % 100 == 0) {
@@ -935,7 +936,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         }
 
         // AutoCurriculum evaluation — 仅在非战斗、非技能执行、非采集活跃时评估（服务端）
-        if (!this.level().isClientSide && !isSkillActive() && isAlive() && getOwner() != null
+        if (!useNewFramework && !this.level().isClientSide && !isSkillActive() && isAlive() && getOwner() != null
             && !isActivelyMining()) {
             curriculumTickCounter++;
             if (curriculumTickCounter >= CURRICULUM_EVAL_INTERVAL) {
@@ -1284,21 +1285,27 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     private void updateSprintState() {
         var speedAttr = this.getAttribute(Attributes.MOVEMENT_SPEED);
         if (speedAttr == null) return;
-        if (hungerLevel <= 6) { this.setSprinting(false); return; } // 饥饿≤6不能疾跑（原版规则）
         double baseSpeed = baseMoveSpeed;
         ServerPlayer owner = getOwner();
+
+        if (owner != null && isFollowModeActive()) {
+            var ownerSpeedAttr = owner.getAttribute(Attributes.MOVEMENT_SPEED);
+            if (ownerSpeedAttr != null) {
+                speedAttr.setBaseValue(ownerSpeedAttr.getValue());
+                this.setSprinting(owner.isSprinting());
+                return;
+            }
+        }
+
+        if (hungerLevel <= 6) { this.setSprinting(false); speedAttr.setBaseValue(baseSpeed); return; } // 饥饿≤6不能疾跑（原版规则）
         boolean shouldSprint = false;
         // 追随：距离>6格疾跑追赶
-        if (owner != null && this.distanceToSqr(owner) > 6.25) {
+        if (owner != null && isFollowModeActive() && this.distanceToSqr(owner) > 6.25) {
             shouldSprint = true;
         }
         // 战斗/采集/种植模式中自动疾跑（只在导航移动时，避免站桩跑步粒子）
         if (isGuardModeEnabled() || isGatherModeEnabled() || isFarmModeEnabled()) {
             shouldSprint = !this.getNavigation().isDone();
-        }
-        // 新框架：导航移动时自动疾跑
-        if (useNewFramework && !this.getNavigation().isDone()) {
-            shouldSprint = true;
         }
         this.setSprinting(shouldSprint);
         speedAttr.setBaseValue(shouldSprint ? baseSpeed * 1.3 : baseSpeed);
@@ -2116,14 +2123,16 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     }
 
     /**
-     * Enable or disable the follow goal
+     * Enable or disable following through the new framework.
      */
     public void setFollowEnabled(boolean enabled) {
-        if (this.followGoal != null) {
-            this.followGoal.setEnabled(enabled);
-            if (!enabled) {
-                this.getNavigation().stop();
-            }
+        if (enabled) {
+            scheduler.jumpToFollow();
+            syncLegacyState();
+            enableNewFramework("follow");
+        } else {
+            setMode("idle");
+            this.getNavigation().stop();
         }
     }
 
@@ -2150,6 +2159,9 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
 
         int next = scheduler.cycleActive();
         syncLegacyState();
+        if (next == CapabilityFlags.FOLLOW) {
+            enableNewFramework("follow");
+        }
         animateSwing();
         showDialogue(CapabilityFlags.toChineseName(next) + "模式", 60);
         return next == CapabilityFlags.FOLLOW;
@@ -2162,6 +2174,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     public void returnToFollow() {
         scheduler.jumpToFollow();
         syncLegacyState();
+        enableNewFramework("follow");
         showDialogue("返回跟随模式", 60);
         AICompanionMod.LOGGER.info("[AutomatonEntity] Returned to follow mode");
     }
@@ -2513,8 +2526,18 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     }
 
     public void setGatherModeEnabled(boolean enabled) {
-        if (enabled) scheduler.setActive(CapabilityFlags.GATHER);
-        else if (scheduler.isActive(CapabilityFlags.GATHER)) scheduler.setActive(CapabilityFlags.FOLLOW);
+        if (enabled) {
+            scheduler.setActive(CapabilityFlags.GATHER);
+            String mode = switch (gatherFilter) {
+                case "ores" -> "mine";
+                case "wood" -> "chop";
+                default -> "autonomous";
+            };
+            enableNewFramework(mode);
+        } else if (scheduler.isActive(CapabilityFlags.GATHER)) {
+            scheduler.setActive(CapabilityFlags.FOLLOW);
+            enableNewFramework("follow");
+        }
         syncLegacyState();
     }
 
@@ -2599,7 +2622,17 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     /** "all", "ores", "wood" */
     public String getGatherFilter() { return gatherFilter; }
 
-    public void setGatherFilter(String filter) { this.gatherFilter = filter; }
+    public void setGatherFilter(String filter) {
+        this.gatherFilter = filter;
+        if (isGatherModeEnabled()) {
+            String mode = switch (gatherFilter) {
+                case "ores" -> "mine";
+                case "wood" -> "chop";
+                default -> "autonomous";
+            };
+            enableNewFramework(mode);
+        }
+    }
 
     /** LLM-set priority resources (substrings like "iron", "diamond") */
     public java.util.Set<String> getGatherPriorityResources() { return gatherPriorityResources; }
@@ -3257,6 +3290,15 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
     public void setAutonomousMode(boolean enabled) {
         this.autonomousMode = enabled;
         if (enabled) {
+            if (!useNewFramework) {
+                enableNewFramework("autonomous");
+            } else {
+                setMode("autonomous");
+            }
+        } else if (useNewFramework && "autonomous".equals(newFrameworkMode)) {
+            setMode("follow");
+        }
+        if (enabled) {
             showDialogue("\u00a7a自主模式已开启 - 我将自行决策", 60);
         } else {
             showDialogue("\u00a77自主模式已关闭 - 等待你的指令", 60);
@@ -3371,6 +3413,9 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         if (actionExecutor == null) {
             actionExecutor = new com.aiworkbench.companion.core.action.ActionExecutor(this);
         }
+        if (coreBrain == null) {
+            coreBrain = new com.aiworkbench.companion.core.brain.CoreBrain();
+        }
         if (ruleDecisionMaker == null) {
             ruleDecisionMaker = new com.aiworkbench.companion.core.decision.RuleBasedDecisionMaker();
         }
@@ -3394,14 +3439,16 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
 
     /** 切换模式 */
     public void setMode(String mode) {
-        this.newFrameworkMode = mode;
-        authorizedCapabilities.clear();
-        if ("chop".equals(mode)) {
-            authorizedCapabilities.add("gather_logs");
-        } else if ("mine".equals(mode)) {
-            authorizedCapabilities.add("gather_ores");
+        if (coreBrain == null) {
+            coreBrain = new com.aiworkbench.companion.core.brain.CoreBrain();
         }
-        // "follow" 模式：不加任何采集能力，idle 时跟随
+        coreBrain.setMode(mode);
+        this.newFrameworkMode = coreBrain.modeId();
+        authorizedCapabilities.clear();
+        authorizedCapabilities.addAll(coreBrain.authorizedCapabilities());
+        if (actionExecutor != null) {
+            actionExecutor.abort();
+        }
     }
 
     public String getMode() { return newFrameworkMode; }
@@ -3426,6 +3473,7 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
      */
     private boolean tickCoreFramework() {
         if (!useNewFramework) return false;
+        boolean followMode = "follow".equals(newFrameworkMode);
 
         // 降频感知：每 20 tick（1 秒）重新扫描
         perceptionCooldown--;
@@ -3438,7 +3486,9 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         }
 
         // 有活跃动作 → 驱动执行（不重新决策）
-        if (actionExecutor.isActive()) {
+        if (actionExecutor.isActive() && followMode) {
+            actionExecutor.abort();
+        } else if (actionExecutor.isActive()) {
             // MC-043: 感知降频期间 perception 可能为 null，强制采集
             if (perception == null) {
                 perception = PerceptionEngine.gatherStructured(this);
@@ -3468,35 +3518,29 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
 
         // 无活跃动作 + 冷却中 → 等待（MC-044: 冷却在外层控制，DecisionMaker 为纯函数）
         if (decisionCooldown > 0) {
+            if (followMode) {
+                decisionCooldown = 0;
+            } else {
             decisionCooldown--;
             return true;
+            }
         }
 
         // 无活跃动作 + 冷却结束 → 决策下一步
-        decisionCooldown = 20; // 1 秒冷却防止决策抖动
+        decisionCooldown = followMode ? 2 : 20; // follow needs fresh owner positions
         if (perception == null) {
             perception = PerceptionEngine.gatherStructured(this);
             perceptionCooldown = 20;
         }
-        var memory = com.aiworkbench.companion.core.decision.MemorySnapshot.withAuth(authorizedCapabilities);
-        var decision = ruleDecisionMaker.decide(perception, memory);
-
-        // idle 行为取决于模式
-        if ("idle".equals(decision.actionId())) {
-            if ("chop".equals(newFrameworkMode) || "mine".equals(newFrameworkMode)) {
-                // 采集模式：idle → 站着等，不跟随（等感知刷新发现新目标）
-                return true;
-            }
-            // 跟随模式：idle → 跟随最近玩家
-            var nearest = this.level().getNearestPlayer(this, 64);
-            if (nearest != null) {
-                decision = new com.aiworkbench.companion.core.decision.ActionDecision("MoveTo",
-                    java.util.Map.of("target", nearest.blockPosition()),
-                    "idle → follow player", com.aiworkbench.companion.core.decision.DecisionSource.RULE_ENGINE);
-            } else {
-                return true;
-            }
+        if (coreBrain == null) {
+            coreBrain = new com.aiworkbench.companion.core.brain.CoreBrain();
+            coreBrain.setMode(newFrameworkMode);
         }
+        var nearest = this.level().getNearestPlayer(this, 64);
+        BlockPos followTarget = nearest != null ? nearest.blockPosition() : null;
+        var decision = coreBrain.decide(perception, followTarget);
+
+        if ("idle".equals(decision.actionId())) return true;
         // 提取目标位置（用于失败跟踪和死循环防护）
         BlockPos decisionTarget = decision.params().get("$found_block.pos") instanceof BlockPos bp ? bp : null;
 
@@ -3514,10 +3558,10 @@ public class AutomatonEntity extends PathfinderMob implements net.minecraft.worl
         String capId = (String) decision.params().get("capability_id");
         if (capId != null && !authorizedCapabilities.contains(capId)) {
             // 未授权能力 → 直接跟随玩家，不产生自引用偏移
-            var nearest = this.level().getNearestPlayer(this, 64);
-            if (nearest != null) {
+            var nearestAllowedFallback = this.level().getNearestPlayer(this, 64);
+            if (nearestAllowedFallback != null) {
                 decision = new com.aiworkbench.companion.core.decision.ActionDecision("MoveTo",
-                    java.util.Map.of("target", nearest.blockPosition()),
+                    java.util.Map.of("target", nearestAllowedFallback.blockPosition(), "speed", 1.0),
                     "unauthorized → follow player", com.aiworkbench.companion.core.decision.DecisionSource.RULE_ENGINE);
             } else {
                 return true; // 找不到玩家，跳过本次决策

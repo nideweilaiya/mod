@@ -6,7 +6,10 @@ import com.aiworkbench.companion.core.perception.PerceptionData;
 import com.aiworkbench.companion.entity.AutomatonEntity;
 
 import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.item.AxeItem;
+import net.minecraft.world.item.PickaxeItem;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.SwordItem;
 
 /**
  * 将背包中的指定物品切换到主手的动作原语。
@@ -74,6 +77,15 @@ public class EquipItemAction implements IAction {
     }
 
     private boolean matches(ItemStack stack) {
+        if ("axe".equals(itemKeyword)) {
+            return stack.getItem() instanceof AxeItem;
+        }
+        if ("pickaxe".equals(itemKeyword)) {
+            return stack.getItem() instanceof PickaxeItem;
+        }
+        if ("sword".equals(itemKeyword)) {
+            return stack.getItem() instanceof SwordItem;
+        }
         String id = stack.getItem().builtInRegistryHolder().key().location().getPath();
         return id.contains(itemKeyword);
     }

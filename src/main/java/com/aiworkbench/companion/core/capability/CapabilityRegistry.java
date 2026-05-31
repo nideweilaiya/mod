@@ -53,12 +53,17 @@ public class CapabilityRegistry {
                 new CapabilityDefinition.ActionStep("SetNextTarget", Map.of()),
                 new CapabilityDefinition.ActionStep("NavigateToInteract",
                     Map.of("target", "$current_target")),
+                new CapabilityDefinition.ActionStep("EnsureReachBlock",
+                    Map.of("target", "$current_target")),
                 new CapabilityDefinition.ActionStep("BreakBlock",
                     Map.of("target", "$current_target")),
                 new CapabilityDefinition.ActionStep("PickupItem",
                     Map.of("item_filter", "log"))
             );
             def.action_sequence.add(repeat);
+            def.action_sequence.add(new CapabilityDefinition.ActionStep("CleanupTemporaryBlocks", Map.of()));
+            def.action_sequence.add(new CapabilityDefinition.ActionStep("PickupItem",
+                Map.of("item_filter", "")));
             register(def);
         }
         // gather_ores
@@ -138,6 +143,7 @@ public class CapabilityRegistry {
 
     /** 尝试从 config/capabilities/ 加载 JSON 文件 */
     public static void loadFromConfig(Path configDir) {
+        ensureLoaded();
         Path capDir = configDir.resolve("capabilities");
         if (!Files.isDirectory(capDir)) {
             AICompanionMod.LOGGER.debug("[CapabilityRegistry] No capabilities dir at {}", capDir);

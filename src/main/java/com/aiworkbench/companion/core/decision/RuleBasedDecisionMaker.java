@@ -52,7 +52,7 @@ public class RuleBasedDecisionMaker implements IDecisionMaker {
         }
 
         // 木头需求：仅当 gather_logs 授权时评估
-        if (auth.isEmpty() || auth.contains("gather_logs")) {
+        if (auth.contains("gather_logs")) {
             double woodUrgency = evaluateWood(perception);
             if (woodUrgency > 0) {
                 utilities.put("wood", woodUrgency / 5.0);

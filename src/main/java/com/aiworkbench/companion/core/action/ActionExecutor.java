@@ -14,23 +14,23 @@ import net.minecraft.core.BlockPos;
 import java.util.*;
 
 /**
- * 动作序列执行器 — 执行层的核心。
+ * 动作序列执行�?�?执行层的核心�?
  *
- * <p>从评估层接收 {@link ActionDecision}，创建对应的 {@link IAction} 实例，
- * 每 tick 驱动一个原语直到返回 SUCCESS 或 FAILURE。</p>
+ * <p>从评估层接收 {@link ActionDecision}，创建对应的 {@link IAction} 实例�?
+ * �?tick 驱动一个原语直到返�?SUCCESS �?FAILURE�?/p>
  *
- * <h3>单动作模式</h3>
+ * <h3>单动作模�?/h3>
  * <pre>{@code
  *   executor.dispatch(decision);
- *   // 每 tick: executor.tick(perception) → null=进行中, ActionTickResult=完成
+ *   // �?tick: executor.tick(perception) �?null=进行�? ActionTickResult=完成
  * }</pre>
  *
  * <h3>序列模式（能力驱动）</h3>
  * <pre>{@code
  *   executor.dispatchCapability("gather_logs");
- *   // 自动逐个执行: NavigateToInteract → EquipItem → BreakBlock → PickupItem
- *   // 当前动作 SUCCESS → 自动下一个
- *   // 任一动作 FAILURE → 序列终止，回报评估层
+ *   // 自动逐个执行: NavigateToInteract �?EquipItem �?BreakBlock �?PickupItem
+ *   // 当前动作 SUCCESS �?自动下一�?
+ *   // 任一动作 FAILURE �?序列终止，回报评估层
  * }</pre>
  */
 public class ActionExecutor {
@@ -39,13 +39,15 @@ public class ActionExecutor {
     private IAction currentAction;
     private boolean sequenceActive;
 
-    // 序列上下文
+    // 序列上下�?
     private final Map<String, Object> variables = new LinkedHashMap<>();
     private Queue<ActionDecision> pendingSequence; // 待执行的剩余动作
-    private String activeCapabilityId; // 当前正在执行的能力 ID（用于日志）
+    private String activeCapabilityId; // 当前正在执行的能�?ID（用于日志）
     // repeat 控制结构
-    private List<ActionDecision> repeatBody; // repeat 循环体（完成后再插入）
-    private Map<String, Object> repeatCondition; // repeat 退出条件
+    private List<ActionDecision> repeatBody; // repeat 循环体（完成后再插入�?
+    private Map<String, Object> repeatCondition; // repeat 退出条�?
+
+    private List<ActionDecision> repeatPostSequence;
 
     public ActionExecutor(AutomatonEntity entity) {
         this.entity = entity;
@@ -64,22 +66,23 @@ public class ActionExecutor {
         activeCapabilityId = null;
         repeatBody = null;
         repeatCondition = null;
+        repeatPostSequence = null;
         variables.clear();
     }
 
-    // ==================== 单动作派遣 ====================
+    // ==================== 单动作派�?====================
 
     /**
-     * 根据 ActionDecision 创建对应的 IAction 并开始执行。
-     * 如果已有序列在执行，先中断。
-     * 创建前调用 canExecute 检查前置条件。
+     * 根据 ActionDecision 创建对应�?IAction 并开始执行�?
+     * 如果已有序列在执行，先中断�?
+     * 创建前调�?canExecute 检查前置条件�?
      */
     public void dispatch(ActionDecision decision) {
-        // EXECUTE_CAPABILITY → 注入变量 + 委托给能力派遣
+        // EXECUTE_CAPABILITY �?注入变量 + 委托给能力派�?
         if ("EXECUTE_CAPABILITY".equals(decision.actionId())) {
             String capId = (String) decision.params().get("capability_id");
             if (capId != null) {
-                // 注入 $found_block.pos 等变量引用
+                // 注入 $found_block.pos 等变量引�?
                 for (var entry : decision.params().entrySet()) {
                     if (entry.getKey().startsWith("$")) {
                         setVariable(entry.getKey(), entry.getValue());
@@ -104,8 +107,8 @@ public class ActionExecutor {
     // ==================== 序列派遣（能力驱动） ====================
 
     /**
-     * 从 CapabilityRegistry 加载能力定义的原语序列并开始执行。
-     * 序列中的 $found_block.pos 变量需在调用前通过 setVariable() 注入。
+     * �?CapabilityRegistry 加载能力定义的原语序列并开始执行�?
+     * 序列中的 $found_block.pos 变量需在调用前通过 setVariable() 注入�?
      */
     public void dispatchCapability(String capabilityId) {
         CapabilityDefinition def = CapabilityRegistry.get(capabilityId);
@@ -118,24 +121,37 @@ public class ActionExecutor {
             return;
         }
 
-        // 分离 pre-repeat 步骤和 repeat 体
+        // 每次派发新能力时都重�?repeat 状态，避免前一个能力残�?        repeatBody = null;
+        repeatBody = null;
+        repeatCondition = null;
+        repeatPostSequence = null;
+
+        // 分离 pre-repeat 步骤�?repeat �?        List<ActionDecision> preRepeat = new ArrayList<>();
         List<ActionDecision> preRepeat = new ArrayList<>();
+        List<ActionDecision> postRepeat = new ArrayList<>();
         CapabilityDefinition.ActionStep repeatStep = null;
+        boolean afterRepeat = false;
 
         for (var step : def.action_sequence) {
             if (step.isRepeat()) {
                 repeatStep = step;
-                break; // repeat 之后不应再有其他步骤
+                afterRepeat = true;
+                continue;
             }
-            preRepeat.add(new ActionDecision(
+            ActionDecision action = new ActionDecision(
                 step.action,
                 step.params != null ? new LinkedHashMap<>(step.params) : Map.of(),
                 capabilityId + ":" + step.action,
                 DecisionSource.RULE_ENGINE
-            ));
+            );
+            if (afterRepeat) {
+                postRepeat.add(action);
+            } else {
+                preRepeat.add(action);
+            }
         }
 
-        // 设置 repeat 循环体
+        // 设置 repeat 循环�?
         if (repeatStep != null && repeatStep.body != null) {
             repeatBody = new ArrayList<>();
             for (var bodyStep : repeatStep.body) {
@@ -150,21 +166,23 @@ public class ActionExecutor {
                 ? new LinkedHashMap<>(repeatStep.condition) : Map.of();
         }
 
+        repeatPostSequence = postRepeat.isEmpty() ? null : postRepeat;
+
         dispatchSequence(preRepeat, capabilityId);
     }
 
     /**
-     * 加载一个 ActionDecision 序列并开始逐个执行。
-     * 当前动作 SUCCESS → 自动弹出下一个动作。
-     * 任一动作 FAILURE → 序列终止。
+     * 加载一�?ActionDecision 序列并开始逐个执行�?
+     * 当前动作 SUCCESS �?自动弹出下一个动作�?
+     * 任一动作 FAILURE �?序列终止�?
      *
-     * <p>注意：不使用 abort()，因为 variables 可能已在 dispatch() 中注入。
-     * 仅重置序列状态。</p>
+     * <p>注意：不使用 abort()，因�?variables 可能已在 dispatch() 中注入�?
+     * 仅重置序列状态�?/p>
      */
     public void dispatchSequence(List<ActionDecision> sequence, String capabilityId) {
         if (sequence == null || sequence.isEmpty()) return;
 
-        // 重置序列状态，但保留 variables（调用者可能已注入 $found_block.pos 等变量）
+        // 重置序列状态，但保�?variables（调用者可能已注入 $found_block.pos 等变量）
         currentAction = null;
         sequenceActive = false;
         pendingSequence = new ArrayDeque<>(sequence);
@@ -173,9 +191,17 @@ public class ActionExecutor {
         advanceSequence();
     }
 
-    /** 弹出序列中下一个动作并开始执行 */
+    /** 弹出序列中下一个动作并开始执�?*/
     private void advanceSequence() {
         if (pendingSequence == null || pendingSequence.isEmpty()) {
+            // 关键修复：当前序列步骤即使都�?canExecute=false 跳过，也要先尝试 repeat 展开
+            // 否则会出�?capability 反复 "completed" 但不进入循环体的空转问题�?
+            if (tryExpandRepeat()) {
+                return;
+            }
+            if (tryRunRepeatPostSequence()) {
+                return;
+            }
             // 序列全部完成
             AICompanionMod.LOGGER.info("[ActionExecutor] Capability '{}' sequence completed", activeCapabilityId);
             sequenceActive = false;
@@ -185,7 +211,7 @@ public class ActionExecutor {
         }
 
         ActionDecision next = pendingSequence.poll();
-        // 解析变量引用（$found_block.pos）
+        // 解析变量引用�?found_block.pos�?
         ActionDecision resolved = resolveVariables(next);
         currentAction = createAction(resolved);
 
@@ -200,8 +226,8 @@ public class ActionExecutor {
         }
 
         if (!currentAction.canExecute(null)) {
-            // canExecute=false 不一定是错误 — 可能是"已经满足"（如已装备斧头）
-            // 跳过当前步骤，继续执行下一个
+            // canExecute=false 不一定是错误 �?可能�?已经满足"（如已装备斧头）
+            // 跳过当前步骤，继续执行下一�?
             AICompanionMod.LOGGER.debug("[ActionExecutor] canExecute=false for '{}' in '{}', skipping to next",
                 resolved.actionId(), activeCapabilityId);
             advanceSequence();
@@ -227,10 +253,10 @@ public class ActionExecutor {
         return new ActionDecision(decision.actionId(), resolved, decision.reasoning(), decision.source());
     }
 
-    // ==================== 每 tick 驱动 ====================
+    // ==================== �?tick 驱动 ====================
 
     /**
-     * 每 tick 驱动当前动作。
+     * �?tick 驱动当前动作�?
      *
      * @param perception 当前感知快照
      * @return 当前动作完成时的结果汇总，未完成时返回 null
@@ -245,16 +271,19 @@ public class ActionExecutor {
         return switch (result) {
             case SUCCESS -> {
                 AICompanionMod.LOGGER.debug("[ActionExecutor] Action SUCCESS");
-                // 有后续动作 → 自动衔接
+                // 有后续动�?�?自动衔接
                 if (pendingSequence != null && !pendingSequence.isEmpty()) {
                     advanceSequence();
                     yield null;
                 }
-                // 序列空 → 检查 repeat 条件
+                // 序列�?�?检�?repeat 条件
                 if (tryExpandRepeat()) {
-                    yield null; // repeat 扩展成功，继续执行
+                    yield null; // repeat 扩展成功，继续执�?
                 }
-                // 无 repeat 或有条件不满足 → 序列结束
+                if (tryRunRepeatPostSequence()) {
+                    yield null;
+                }
+                // �?repeat 或有条件不满�?�?序列结束
                 sequenceActive = false;
                 currentAction = null;
                 yield new ActionTickResult(ActionTickResult.Outcome.COMPLETED, activeCapabilityId);
@@ -273,7 +302,7 @@ public class ActionExecutor {
         };
     }
 
-    // ==================== 决策 → 原语映射 ====================
+    // ==================== 决策 �?原语映射 ====================
 
     @SuppressWarnings("unchecked")
     private IAction createAction(ActionDecision decision) {
@@ -281,7 +310,7 @@ public class ActionExecutor {
             case "MoveTo" -> {
                 BlockPos target = resolveTarget(decision.params().get("target"));
                 if (target == null) yield null;
-                yield new MoveToAction(entity, target);
+                yield new MoveToAction(entity, target, resolveSpeed(decision.params().get("speed")));
             }
             case "NavigateToInteract" -> {
                 BlockPos target = resolveTarget(decision.params().get("target"));
@@ -293,6 +322,12 @@ public class ActionExecutor {
                 if (target == null) yield null;
                 yield new BreakBlockAction(entity, target);
             }
+            case "EnsureReachBlock" -> {
+                BlockPos target = resolveTarget(decision.params().get("target"));
+                if (target == null) yield null;
+                yield new EnsureReachBlockAction(entity, target, variables);
+            }
+            case "CleanupTemporaryBlocks" -> new CleanupTemporaryBlocksAction(entity, variables);
             case "PlaceBlock" -> {
                 BlockPos target = resolveTarget(decision.params().get("target"));
                 String keyword = (String) decision.params().getOrDefault("block_keyword", null);
@@ -369,6 +404,20 @@ public class ActionExecutor {
         return null;
     }
 
+    private double resolveSpeed(Object speedParam) {
+        if (speedParam instanceof Number n) {
+            return Math.max(0.0, n.doubleValue());
+        }
+        if (speedParam instanceof String s) {
+            try {
+                return Math.max(0.0, Double.parseDouble(s));
+            } catch (NumberFormatException ignored) {
+                return 1.0;
+            }
+        }
+        return 1.0;
+    }
+
     /** 存储变量（供序列中的 $found_block.pos 等变量引用使用） */
     public void setVariable(String name, Object value) {
         variables.put(name, value);
@@ -377,11 +426,11 @@ public class ActionExecutor {
     // ==================== repeat 控制结构 ====================
 
     /**
-     * repeat 控制结构 — do-while 语义。
-     * 支持两种条件模式：
+     * repeat 控制结构 �?do-while 语义�?
+     * 支持两种条件模式�?
      * <ul>
-     *   <li>{@code list_not_empty} — 检查变量列表是否非空（全树扫描模式）</li>
-     *   <li>{@code block_matches} — 检查 $current_target 方块名匹配关键字（单列上移模式）</li>
+     *   <li>{@code list_not_empty} �?检查变量列表是否非空（全树扫描模式�?/li>
+     *   <li>{@code block_matches} �?检�?$current_target 方块名匹配关键字（单列上移模式）</li>
      * </ul>
      */
     private boolean tryExpandRepeat() {
@@ -406,7 +455,7 @@ public class ActionExecutor {
             return false;
         }
 
-        // ---- 条件模式 2: block_matches (单列上移，兼容 gather_ores) ----
+        // ---- 条件模式 2: block_matches (单列上移，兼�?gather_ores) ----
         boolean firstEntry = !variables.containsKey("$current_target");
         if (firstEntry) {
             Object foundBlock = variables.get("$found_block.pos");
@@ -419,7 +468,7 @@ public class ActionExecutor {
 
         if (!firstEntry) {
             String keyword = (String) repeatCondition.getOrDefault("block_matches",
-                repeatCondition.get("block_above")); // 兼容旧配置
+                repeatCondition.get("block_above")); // 兼容旧配�?
             BlockPos currentTarget = (BlockPos) variables.get("$current_target");
             if (currentTarget == null || keyword == null) {
                 repeatBody = null; repeatCondition = null; return false;
@@ -440,9 +489,21 @@ public class ActionExecutor {
         return true;
     }
 
+    private boolean tryRunRepeatPostSequence() {
+        if (repeatPostSequence == null || repeatPostSequence.isEmpty()) {
+            return false;
+        }
+        pendingSequence = new ArrayDeque<>(repeatPostSequence);
+        repeatPostSequence = null;
+        AICompanionMod.LOGGER.info("[ActionExecutor] Repeat post sequence: {} steps", pendingSequence.size());
+        advanceSequence();
+        return true;
+    }
+
     // ==================== 内部类型 ====================
 
     public record ActionTickResult(Outcome outcome, String detail) {
         public enum Outcome { COMPLETED, FAILED }
     }
 }
+

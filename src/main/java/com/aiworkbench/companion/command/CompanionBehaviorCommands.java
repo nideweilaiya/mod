@@ -167,13 +167,29 @@ public class CompanionBehaviorCommands {
     }
 
     private static int toggleMine(CommandSourceStack source) {
-        // 废弃：重定向到 gather 模式
-        return toggleGather(source);
+        ServerPlayer player = source.getPlayer();
+        if (player == null) { source.sendFailure(Component.literal("必须由玩家执行")); return 0; }
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("你没有同伴"));
+            return 0;
+        }
+        companion.setGatherFilter("ores");
+        companion.setGatherModeEnabled(!companion.isGatherModeEnabled());
+        return 1;
     }
 
     private static int toggleChop(CommandSourceStack source) {
-        // 废弃：重定向到 gather 模式
-        return toggleGather(source);
+        ServerPlayer player = source.getPlayer();
+        if (player == null) { source.sendFailure(Component.literal("必须由玩家执行")); return 0; }
+        AutomatonEntity companion = AICompanionMod.companionManager.getCompanion(player.getUUID());
+        if (companion == null || !companion.isAlive()) {
+            source.sendFailure(Component.literal("你没有同伴"));
+            return 0;
+        }
+        companion.setGatherFilter("wood");
+        companion.setGatherModeEnabled(!companion.isGatherModeEnabled());
+        return 1;
     }
 
     private static int setFollowMode(CommandSourceStack source) {

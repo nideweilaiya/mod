@@ -56,8 +56,9 @@ class RuleBasedDecisionMakerTest {
 
         ActionDecision d = engine.decide(p, m);
         // 需要木头 + 附近有树 → 移动到树
-        assertEquals("MoveTo", d.actionId());
-        assertNotNull(d.params().get("target"));
+        assertEquals("EXECUTE_CAPABILITY", d.actionId());
+        assertEquals("gather_logs", d.params().get("capability_id"));
+        assertNotNull(d.params().get("$found_block.pos"));
     }
 
     @Test
@@ -71,7 +72,7 @@ class RuleBasedDecisionMakerTest {
 
         ActionDecision d = engine.decide(p, m);
         // 饥饿 + 附近有动物 → 移动到食物源
-        assertEquals("MoveTo", d.actionId());
+        assertEquals("NavigateToInteract", d.actionId());
     }
 
     @Test

@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "IGI",
+    "GEG",
+    "IGI"
+  ],
+  "key": {
+    "I": { "item": "minecraft:iron_ingot" },
+    "G": { "item": "minecraft:gold_nugget" },
+    "E": { "item": "minecraft:emerald" }
+  },
+  "result": {
+    "item": "aicompanion:companion_core",
+    "count": 1
+  }
+}

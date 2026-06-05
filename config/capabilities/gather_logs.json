@@ -1,0 +1,50 @@
+{
+  "id": "gather_logs",
+  "name": "采集木材",
+  "need": "wood",
+  "block_keywords": ["_log", "_stem", "wood", "_hyphae"],
+  "action_sequence": [
+    {
+      "action": "EquipItem",
+      "params": { "keyword": "axe" }
+    },
+    {
+      "action": "NavigateToInteract",
+      "params": { "target": "$found_block.pos" }
+    },
+    {
+      "action": "repeat",
+      "condition": { "list_not_empty": "$tree_cut_list" },
+      "body": [
+        {
+          "action": "SetNextTarget",
+          "params": {}
+        },
+        {
+          "action": "NavigateToInteract",
+          "params": { "target": "$current_target" }
+        },
+        {
+          "action": "EnsureReachBlock",
+          "params": { "target": "$current_target" }
+        },
+        {
+          "action": "BreakBlock",
+          "params": { "target": "$current_target" }
+        },
+        {
+          "action": "PickupItem",
+          "params": { "item_filter": "log" }
+        }
+      ]
+    },
+    {
+      "action": "CleanupTemporaryBlocks",
+      "params": {}
+    },
+    {
+      "action": "PickupItem",
+      "params": { "item_filter": "" }
+    }
+  ]
+}
